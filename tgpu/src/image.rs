@@ -3,23 +3,32 @@ use std::{cell::UnsafeCell, ops};
 use ash::vk;
 use vkm::Alloc;
 
-use crate::{raw::RawDevice, Allocation, Device};
+use crate::{Allocation, Device, raw::RawDevice};
 
-pub struct Image { 
-    inner: ImageImpl,
+pub struct Sampler {
+    pub inner: SamplerImpl,
 }
 
-pub struct ImageImpl { 
+pub struct SamplerImpl {
+    pub handle: vk::Sampler,
+    pub device: RawDevice,
+}
+
+pub struct Image {
+    pub inner: ImageImpl,
+}
+
+pub struct ImageImpl {
     pub handle: vk::Image,
     pub view: vk::ImageView,
-    pub sampler: Option<vk::Sampler>,
+    pub sampler: Option<Sampler>,
     pub details: UnsafeCell<ImageDetails>,
     pub device: RawDevice,
-    pub allocation: Option<Allocation>
+    pub allocation: Option<Allocation>,
 }
 
 #[derive(Default, Clone, Copy)]
-pub struct ImageDetails { 
+pub struct ImageDetails {
     pub format: vk::Format,
     pub layout: vk::ImageLayout,
     pub stage: vk::PipelineStageFlags,
@@ -81,8 +90,6 @@ pub struct ImageInfo<'a> {
     pub label: Option<&'a str>,
     pub tag: Option<(u64, &'a [u8])>,
 }
-
-
 
 impl Default for SamplerInfo<'_> {
     fn default() -> Self {
@@ -193,11 +200,16 @@ impl Device {
         };
 
         let (handle, allocation) = unsafe {
-            self.inner.allocator.create_image(&image_info, &allocation_create_info)
-            .unwrap()
+            self.inner
+                .allocator
+                .create_image(&image_info, &allocation_create_info)
+                .unwrap()
         };
 
-        unsafe { self.inner.set_object_debug_info(handle, info.label, info.tag) };
+        unsafe {
+            self.inner
+                .set_object_debug_info(handle, info.label, info.tag)
+        };
 
         let view_info = CustomImageViewInfo::new(handle, info.format, &info.view);
         let view = self.create_image_view(&view_info);
@@ -234,7 +246,6 @@ impl Device {
         };
 
         Image { inner: image_impl }
-        
     }
 
     pub fn create_image_view(&self, info: &CustomImageViewInfo<'_>) -> vk::ImageView {
@@ -252,11 +263,16 @@ impl Device {
                     .layer_count(info.layers.len() as u32),
             );
 
-        let handle = unsafe { self.inner.handle.create_image_view(&view_info, None).unwrap() };
+        let handle = unsafe {
+            self.inner
+                .handle
+                .create_image_view(&view_info, None)
+                .unwrap()
+        };
         handle
     }
 
-    pub fn create_sampler(&self, info: &SamplerInfo<'_>) -> vk::Sampler {
+    pub fn create_sampler(&self, info: &SamplerInfo<'_>) -> Sampler {
         let mut create_info = vk::SamplerCreateInfo::default()
             .mag_filter(info.mag)
             .min_filter(info.min)
@@ -277,10 +293,16 @@ impl Device {
         }
 
         let handle = unsafe { self.inner.handle.create_sampler(&create_info, None) }.unwrap();
-        unsafe { self.inner.set_object_debug_info(handle, info.label, info.tag) };
+        unsafe {
+            self.inner
+                .set_object_debug_info(handle, info.label, info.tag)
+        };
 
-        handle
-       
+        let inner = SamplerImpl {
+            handle,
+            device: self.inner.clone(),
+        };
+        Sampler { inner }
     }
 }
 
@@ -369,12 +391,17 @@ impl Image {
     }
 }
 
+impl Drop for SamplerImpl {
+    fn drop(&mut self) {
+        unsafe {
+            self.device.handle.destroy_sampler(self.handle, None);
+        }
+    }
+}
+
 impl Drop for ImageImpl {
     fn drop(&mut self) {
         unsafe {
-            if let Some(sampler) = self.sampler { 
-                self.device.handle.destroy_sampler(sampler, None);
-            }
             if let Some(allocation) = &mut self.allocation {
                 self.device.handle.destroy_image_view(self.view, None);
                 allocation
@@ -384,4 +411,3 @@ impl Drop for ImageImpl {
         }
     }
 }
-

@@ -5,31 +5,34 @@ use std::fmt;
 use ash::vk;
 
 mod adapter;
+mod allocations;
 mod buffer;
 mod command;
+mod descriptor;
 mod device;
+mod image;
 mod instance;
 mod pipeline;
 mod queue;
 mod shader;
 mod swapchain;
 mod sync;
-mod image;
-mod allocations;
 
 pub mod raw {
     pub use crate::adapter::{AdapterImpl, RawAdapter};
     pub use crate::buffer::BufferImpl;
     pub use crate::command::{CommandBufferImpl, CommandRecorderImpl};
     pub use crate::device::{DeviceImpl, RawDevice};
+    pub use crate::image::{ImageImpl, SamplerImpl};
     pub use crate::instance::{InstanceImpl, RawInstance};
+    pub use crate::pipeline::{ComputePipelineImpl, RenderPipelineImpl};
     pub use crate::queue::{QueueImpl, RawQueue};
     pub use crate::swapchain::{SwapchainImpl, SwapchainImplResources};
     pub use crate::sync::SemaphoreImpl;
-    pub use crate::pipeline::{RenderPipelineImpl, ComputePipelineImpl};
 }
 
 pub use adapter::Adapter;
+pub use allocations::Allocation;
 pub use ash;
 pub use ash::vk::{
     ColorSpaceKHR, CullModeFlags, Format, FrontFace, PolygonMode, PresentModeKHR,
@@ -37,14 +40,21 @@ pub use ash::vk::{
 };
 pub use buffer::{Buffer, BufferInfo, BufferUsage};
 pub use command::{CommandBuffer, CommandPools, CommandRecorder, ThreadCommandPool};
+pub use descriptor::{
+    DescriptorBinding, DescriptorPool, DescriptorPoolInfo, DescriptorSet, DescriptorSetLayout,
+    DescriptorSetLayoutInfo, DescriptorType, DescriptorWrite,
+};
 pub use device::{Device, DeviceCreateInfo};
+pub use image::{
+    CustomImageViewInfo, Image, ImageDetails, ImageInfo, ImageTransition, ImageViewInfo, Sampler,
+    SamplerInfo,
+};
 pub use instance::{Instance, InstanceCreateInfo};
+pub use pipeline::{ComputePipeline, ComputePipelineInfo, RenderPipeline, RenderPipelineInfo};
 pub use queue::{Queue, QueueFamilyInfo, QueueRequest};
 pub use shader::{Shader, ShaderFunction};
 pub use swapchain::{Frame, Swapchain, SwapchainCreateInfo};
 pub use sync::Semaphore;
-pub use pipeline::{RenderPipeline, RenderPipelineInfo, ComputePipeline, ComputePipelineInfo};
-pub use allocations::Allocation;
 
 pub enum GPUError {
     Vulkan(vk::Result),
