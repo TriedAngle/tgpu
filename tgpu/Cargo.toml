@@ -1,0 +1,15 @@
+[package]
+name = "tgpu"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+ash = { workspace = true }  
+ash-window = { workspace = true }
+raw-window-handle = { workspace = true }
+vk-mem = { workspace = true }
+naga = { workspace = true } 
+parking_lot = { workspace = true }
+log = { workspace = true }
+bitflags = { workspace = true }
+bytemuck = { workspace = true }
