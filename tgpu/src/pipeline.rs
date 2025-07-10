@@ -1,11 +1,11 @@
 use ash::vk;
 use std::sync::Arc;
 
-use crate::{raw::DeviceImpl, Device, ShaderFunction};
+use crate::{raw::DeviceImpl, DescriptorSetLayout, Device, ShaderFunction};
 
 pub struct ComputePipelineInfo<'a> {
     pub shader: ShaderFunction<'a>,
-    // pub descriptor_layouts: &'a [&'a DescriptorSetLayout],
+    pub descriptor_layouts: &'a [&'a DescriptorSetLayout],
     pub push_constant_size: Option<u32>,
     pub cache: Option<vk::PipelineCache>,
     pub label: Option<&'a str>,
@@ -16,7 +16,7 @@ impl Default for ComputePipelineInfo<'_> {
     fn default() -> Self {
         Self {
             shader: ShaderFunction::null(),
-            // descriptor_layouts: &[],
+            descriptor_layouts: &[],
             push_constant_size: None,
             cache: None,
             label: None,
@@ -30,7 +30,7 @@ pub struct RenderPipelineInfo<'a> {
     pub fragment_shader: ShaderFunction<'a>,
     pub color_formats: &'a [vk::Format],
     pub depth_format: Option<vk::Format>,
-    // pub descriptor_layouts: &'a [&'a DescriptorSetLayout],
+    pub descriptor_layouts: &'a [&'a DescriptorSetLayout],
     pub push_constant_size: Option<u32>,
     pub blend_states: Option<&'a [vk::PipelineColorBlendAttachmentState]>,
     pub vertex_input_state: Option<vk::PipelineVertexInputStateCreateInfo<'a>>,
@@ -49,7 +49,7 @@ impl Default for RenderPipelineInfo<'_> {
             fragment_shader: ShaderFunction::null(),
             color_formats: &[],
             depth_format: None,
-            // descriptor_layouts: &[],
+            descriptor_layouts: &[],
             push_constant_size: None,
             blend_states: None,
             vertex_input_state: None,
@@ -114,15 +114,15 @@ impl RenderPipelineImpl {
             );
         }
 
-        // let layouts = info
-        //     .descriptor_layouts
-        //     .iter()
-        //     .map(|l| l.handle)
-        //     .collect::<Vec<_>>();
+        let layouts = info
+            .descriptor_layouts
+            .iter()
+            .map(|l| l.handle)
+            .collect::<Vec<_>>();
 
-        let layout_info = vk::PipelineLayoutCreateInfo::default();
-            // .set_layouts(&layouts)
-            // .push_constant_ranges(&push_constant_ranges);
+        let layout_info = vk::PipelineLayoutCreateInfo::default()
+            .set_layouts(&layouts)
+            .push_constant_ranges(&push_constant_ranges);
 
         let layout = unsafe {
             device
@@ -244,14 +244,14 @@ impl ComputePipelineImpl {
             );
         }
 
-        // let layouts = info
-        //     .descriptor_layouts
-        //     .iter()
-        //     .map(|l| l.handle)
-        //     .collect::<Vec<_>>();
+        let layouts = info
+            .descriptor_layouts
+            .iter()
+            .map(|l| l.handle)
+            .collect::<Vec<_>>();
 
         let layout_info = vk::PipelineLayoutCreateInfo::default()
-            // .set_layouts(&layouts)
+            .set_layouts(&layouts)
             .push_constant_ranges(&push_constant_ranges);
 
         let layout = unsafe {

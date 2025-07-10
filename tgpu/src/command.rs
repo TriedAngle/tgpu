@@ -9,8 +9,7 @@ use std::{
 };
 
 use crate::{
-    GPUError, Queue, Semaphore,
-    raw::{QueueImpl, RawDevice},
+    raw::{ComputePipelineImpl, QueueImpl, RawDevice, RenderPipelineImpl}, ComputePipeline, GPUError, Image, ImageTransition, Queue, RenderPipeline, Semaphore
 };
 
 #[derive(Debug)]
@@ -61,9 +60,45 @@ pub struct CommandRecorderImpl {
 
 impl CommandRecorder {
     pub fn finish(&mut self) -> CommandBuffer {
-        let recorder = unsafe { self.inner.get().as_mut().unwrap() };
-        let buffer = unsafe { recorder.finish() };
+        let inner = unsafe { &mut *self.inner.get() };
+        let buffer = unsafe { inner.finish() };
         CommandBuffer { inner: buffer }
+    }
+
+    pub fn viewport(&mut self, viewport: vk::Viewport) {
+        let inner = unsafe { &mut *self.inner.get() };
+        unsafe { inner.viewport(viewport) };
+    }
+
+    pub fn scissor(&mut self, scissor: vk::Rect2D) {
+        let inner = unsafe { &mut *self.inner.get() };
+        unsafe { inner.scissor(scissor) };
+    }
+
+    pub fn draw(&mut self, vertex: ops::Range<u32>, instance: ops::Range<u32>) {
+        let inner = unsafe { &mut *self.inner.get() };
+        unsafe { inner.draw(vertex, instance) };
+    }
+
+    pub fn image_transition(&mut self, image: &Image, transition: ImageTransition) {
+        let inner = unsafe { &mut *self.inner.get() };
+        unsafe { inner.image_transition(image.inner.handle, transition) };
+    }
+
+    pub fn bind_render_pipeline(&mut self, pipeline: &RenderPipeline) {
+        let inner = unsafe { &mut *self.inner.get() };
+        let inner_pipeline = &pipeline.inner;
+        unsafe {
+            inner.bind_render_pipeline(inner_pipeline);
+        }
+    }
+
+    pub fn bind_compute_pipeline(&mut self, pipeline: &ComputePipeline) {
+        let inner = unsafe { &mut *self.inner.get() };
+        let inner_pipeline = &pipeline.inner;
+        unsafe {
+            inner.bind_compute_pipeline(inner_pipeline);
+        }
     }
 }
 impl CommandRecorderImpl {
@@ -78,17 +113,27 @@ impl CommandRecorderImpl {
         self.buffer.clone()
     }
 
-    // pub unsafe fn bind_pipeline(&mut self, pipeline: &RenderPipelineImpl) {
-    //     unsafe {
-    //         self.device.handle.cmd_bind_pipeline(
-    //             self.handle,
-    //             vk::PipelineBindPoint::GRAPHICS,
-    //             pipeline.handle,
-    //         );
-    //     }
-    // }
+    pub unsafe fn bind_render_pipeline(&self, pipeline: &RenderPipelineImpl) {
+        unsafe {
+            self.device.handle.cmd_bind_pipeline(
+                self.buffer.handle,
+                vk::PipelineBindPoint::GRAPHICS,
+                pipeline.handle,
+            );
+        }
+    }
 
-    pub unsafe fn viewport(&mut self, viewport: vk::Viewport) {
+    pub unsafe fn bind_compute_pipeline(&self, pipeline: &ComputePipelineImpl) {
+        unsafe {
+            self.device.handle.cmd_bind_pipeline(
+                self.buffer.handle,
+                vk::PipelineBindPoint::COMPUTE,
+                pipeline.handle,
+            );
+        }
+    }
+
+    pub unsafe fn viewport(&self, viewport: vk::Viewport) {
         unsafe {
             self.device
                 .handle
@@ -96,7 +141,7 @@ impl CommandRecorderImpl {
         }
     }
 
-    pub unsafe fn scissor(&mut self, scissor: vk::Rect2D) {
+    pub unsafe fn scissor(&self, scissor: vk::Rect2D) {
         unsafe {
             self.device
                 .handle
@@ -104,7 +149,7 @@ impl CommandRecorderImpl {
         }
     }
 
-    pub unsafe fn draw(&mut self, vertex: ops::Range<u32>, instance: ops::Range<u32>) {
+    pub unsafe fn draw(&self, vertex: ops::Range<u32>, instance: ops::Range<u32>) {
         unsafe {
             self.device.handle.cmd_draw(
                 self.buffer.handle,
@@ -115,14 +160,68 @@ impl CommandRecorderImpl {
             );
         }
     }
+
+    pub unsafe fn image_transition(&self, image: vk::Image, transition: ImageTransition) {
+        let old_layout = transition.from.layout.into();
+        let (src_stage, src_access) = (transition.from.stage, transition.from.access);
+
+        let new_layout = transition.to.layout.into();
+        let (dst_stage, dst_access) = (transition.to.stage, transition.from.access);
+
+        let mut barrier = vk::ImageMemoryBarrier2::default()
+            .image(image)
+            .old_layout(old_layout)
+            .src_stage_mask(src_stage)
+            .src_access_mask(src_access)
+            .new_layout(new_layout)
+            .dst_stage_mask(dst_stage)
+            .dst_access_mask(dst_access)
+            .subresource_range(
+                vk::ImageSubresourceRange::default()
+                    .aspect_mask(transition.aspect)
+                    .base_mip_level(transition.mips.start)
+                    .level_count(transition.mips.len() as u32)
+                    .base_array_layer(transition.layers.start)
+                    .layer_count(transition.layers.len() as u32),
+            );
+
+        if let Some((src, dst)) = transition.queue {
+            barrier.src_queue_family_index = src.inner.info.family_index;
+            barrier.dst_queue_family_index = dst.inner.info.family_index;
+        }
+
+        let image_memory_barriers = [barrier];
+        let dependency_info = vk::DependencyInfo::default()
+            .dependency_flags(transition.dependency)
+            .image_memory_barriers(&image_memory_barriers);
+
+        unsafe {
+            self.device
+                .handle
+                .cmd_pipeline_barrier2(self.buffer.handle, &dependency_info);
+        }
+    }
 }
 
+#[derive(Debug)]
 pub struct SubmitInfo<'a> {
-    records: &'a [CommandBuffer],
-    wait_binary: &'a [(Semaphore, vk::PipelineStageFlags)],
-    wait_timeline: &'a [(Semaphore, u64, vk::PipelineStageFlags)],
-    signal_binary: &'a [Semaphore],
-    signal_timeline: &'a [(Semaphore, u64)],
+    pub records: &'a [CommandBuffer],
+    pub wait_binary: &'a [(Semaphore, vk::PipelineStageFlags)],
+    pub wait_timeline: &'a [(Semaphore, u64, vk::PipelineStageFlags)],
+    pub signal_binary: &'a [Semaphore],
+    pub signal_timeline: &'a [(Semaphore, u64)],
+}
+
+impl Default for SubmitInfo<'_> {
+    fn default() -> Self {
+        Self {
+            records: &[],
+            wait_binary: &[],
+            wait_timeline: &[],
+            signal_binary: &[],
+            signal_timeline: &[],
+        }
+    }
 }
 
 impl Queue {
@@ -150,6 +249,59 @@ impl Queue {
             inner: Rc::new(UnsafeCell::new(inner)),
         };
         recorder
+    }
+
+    // TODO: we can merge here already, do that maybe
+    pub fn submit(&self, info: SubmitInfo<'_>) -> u64 {
+        let _lock = self.lock();
+        let submission_index = self
+            .submission_counter
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let timeline = self.timeline.clone();
+        let pools = &self.pools;
+
+        let command_buffers = info
+            .records
+            .iter()
+            .map(|b| b.inner.clone())
+            .collect::<Vec<_>>();
+
+        let wait_binary = info
+            .wait_binary
+            .iter()
+            .map(|(s, f)| (s.inner.handle, *f))
+            .collect::<Vec<_>>();
+
+        let wait_timeline = info
+            .wait_timeline
+            .iter()
+            .map(|(s, v, f)| (s.inner.handle, *v, *f))
+            .collect::<Vec<_>>();
+
+        let signal_binary = info
+            .signal_binary
+            .iter()
+            .map(|s| s.inner.handle)
+            .collect::<Vec<_>>();
+
+        let signal_timeline = info
+            .signal_timeline
+            .iter()
+            .map(|(s, v)| (s.inner.handle, *v))
+            .collect::<Vec<_>>();
+
+        self.inner
+            .submit(
+                submission_index,
+                timeline,
+                pools,
+                &command_buffers,
+                &wait_binary,
+                &wait_timeline,
+                &signal_binary,
+                &signal_timeline,
+            )
+            .unwrap()
     }
 }
 

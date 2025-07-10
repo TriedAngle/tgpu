@@ -121,6 +121,7 @@ pub struct BufferInfo<'a> {
     pub usage: BufferUsage,
 }
 
+#[derive(Debug)]
 pub struct BufferImpl {
     pub handle: vk::Buffer,
     pub allocation: UnsafeCell<vkm::Allocation>,
@@ -129,6 +130,7 @@ pub struct BufferImpl {
     pub device: RawDevice,
 }
 
+#[derive(Debug, Clone)]
 pub struct Buffer {
     pub inner: Arc<BufferImpl>,
     pub size: u64,

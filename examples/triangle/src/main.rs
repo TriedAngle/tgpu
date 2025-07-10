@@ -102,13 +102,10 @@ fn fmain(input: VertexOutput) -> @location(0) vec4f {
             )
             .expect("Shader");
 
-
         let pipeline = device.create_render_pipeline(&tgpu::RenderPipelineInfo {
             label: Some("Present Pipeline"),
             vertex_shader: shader.entry("vmain"),
             fragment_shader: shader.entry("fmain"),
-            // descriptor_layouts: &[&gpu.layout],
-            // push_constant_size: Some(mem::size_of::<PresentPushConstants>() as u32),
             cull: tgpu::CullModeFlags::BACK,
             topology: tgpu::PrimitiveTopology::TRIANGLE_LIST,
             polygon: tgpu::PolygonMode::FILL,
@@ -131,14 +128,30 @@ fn fmain(input: VertexOutput) -> @location(0) vec4f {
 
     fn render_frame(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let frame = self.swapchain.acquire_next(None)?;
+        if frame.suboptimal {
+            // TODO swapchain recreation
+        }
         // TODO resize
         let mut recorder = self.queue.record();
-        let _ = recorder.finish();
-        
+
+        recorder.image_transition(
+            self.swapchain.image(frame),
+            tgpu::ImageTransition {
+                from: tgpu::ImageLayoutTransition::UNDEFINED,
+                to: tgpu::ImageLayoutTransition::PRESENT,
+                aspect: vk::ImageAspectFlags::COLOR,
+                ..Default::default()
+            },
+        );
+
+        self.queue.submit(tgpu::SubmitInfo {
+            records: &[recorder.finish()],
+            ..Default::default()
+        });
+
         let _ = self.swapchain.present(&self.queue, frame);
 
         Ok(())
-
     }
 }
 
@@ -175,7 +188,7 @@ impl ApplicationHandler for App {
                 ..
             } => event_loop.exit(),
             WindowEvent::RedrawRequested => {
-                if let Some(render) = &mut self.render { 
+                if let Some(render) = &mut self.render {
                     let _ = render.render_frame();
                     render.window.request_redraw();
                 }

@@ -1,7 +1,7 @@
 use ash::vk;
 use std::sync::Arc;
 
-use crate::{Buffer, Device, Sampler, raw::RawDevice};
+use crate::{raw::RawDevice, Buffer, Device, ImageView, Sampler};
 
 #[derive(Clone, Copy, Debug)]
 pub enum DescriptorType {
@@ -26,7 +26,7 @@ impl From<DescriptorType> for vk::DescriptorType {
     }
 }
 
-#[derive(Copy, Clone)]
+#[derive(Debug, Copy, Clone)]
 pub struct DescriptorBinding {
     pub binding: u32,
     pub ty: DescriptorType,
@@ -79,6 +79,7 @@ impl Default for DescriptorSetLayoutInfo<'_> {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct DescriptorSetLayout {
     pub handle: vk::DescriptorSetLayout,
     pub bindings: Vec<DescriptorBinding>,
@@ -105,11 +106,13 @@ impl Default for DescriptorPoolInfo<'_> {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct DescriptorPool {
     pub handle: vk::DescriptorPool,
     pub device: RawDevice,
 }
 
+#[derive(Debug, Clone)]
 pub enum DescriptorWrite<'a> {
     StorageBuffer {
         binding: u32,
@@ -120,13 +123,13 @@ pub enum DescriptorWrite<'a> {
     },
     StorageImage {
         binding: u32,
-        image_view: vk::ImageView,
+        image_view: &'a ImageView,
         image_layout: vk::ImageLayout,
         array_element: Option<u32>,
     },
     SampledImage {
         binding: u32,
-        image_view: vk::ImageView,
+        image_view: &'a ImageView,
         image_layout: vk::ImageLayout,
         array_element: Option<u32>,
     },
@@ -137,7 +140,7 @@ pub enum DescriptorWrite<'a> {
     },
     CombinedImageSampler {
         binding: u32,
-        image_view: vk::ImageView,
+        image_view: &'a ImageView,
         image_layout: vk::ImageLayout,
         sampler: &'a Sampler,
         array_element: Option<u32>,
@@ -322,7 +325,7 @@ impl DescriptorSet {
                         *binding,
                         vk::DescriptorType::STORAGE_IMAGE,
                         vk::DescriptorImageInfo::default()
-                            .image_view(*image_view)
+                            .image_view(image_view.inner.handle)
                             .image_layout(*image_layout),
                         array_element.unwrap_or(0),
                     ));
@@ -337,7 +340,7 @@ impl DescriptorSet {
                         *binding,
                         vk::DescriptorType::SAMPLED_IMAGE,
                         vk::DescriptorImageInfo::default()
-                            .image_view(*image_view)
+                            .image_view(image_view.inner.handle)
                             .image_layout(*image_layout),
                         array_element.unwrap_or(0),
                     ));
@@ -365,7 +368,7 @@ impl DescriptorSet {
                         *binding,
                         vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
                         vk::DescriptorImageInfo::default()
-                            .image_view(*image_view)
+                            .image_view(image_view.inner.handle)
                             .image_layout(*image_layout)
                             .sampler(sampler.inner.handle),
                         array_element.unwrap_or(0),

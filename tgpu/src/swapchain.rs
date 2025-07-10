@@ -2,8 +2,12 @@ use ash::vk;
 use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 use std::sync::Arc;
 
-use crate::{raw::{DeviceImpl, QueueImpl, RawAdapter, RawDevice}, Device, GPUError, Queue};
+use crate::{
+    Device, GPUError, Image, ImageView, Queue,
+    raw::{DeviceImpl, ImageImpl, ImageViewImpl, QueueImpl, RawAdapter, RawDevice},
+};
 
+#[derive(Debug, Copy, Clone)]
 pub struct Frame {
     pub index: u32,
     pub suboptimal: bool,
@@ -22,10 +26,11 @@ pub struct SwapchainCreateInfo {
     pub format_selector: Box<dyn Fn(&[vk::SurfaceFormatKHR]) -> vk::SurfaceFormatKHR>,
 }
 
+#[derive(Debug)]
 pub struct SwapchainImplResources {
     pub handle: vk::SwapchainKHR,
-    pub images: Vec<vk::Image>,
-    pub views: Vec<vk::ImageView>,
+    pub images: Vec<Image>,
+    pub views: Vec<ImageView>,
     pub capabilities: vk::SurfaceCapabilitiesKHR,
 }
 
@@ -228,7 +233,20 @@ impl SwapchainImpl {
                 .map_err(GPUError::from)?
         };
 
-        let views = Self::create_image_views(&device, &images, format);
+        let images = images
+            .iter()
+            .copied()
+            .map(|handle| Image {
+                format: format.format,
+                inner: Arc::new(ImageImpl {
+                    handle,
+                    device: device.clone(),
+                    allocation: None,
+                }),
+            })
+            .collect::<Vec<_>>();
+
+        let views = Self::create_image_views(device, &images, format);
 
         let resources = SwapchainImplResources {
             handle,
@@ -241,15 +259,15 @@ impl SwapchainImpl {
     }
 
     fn create_image_views(
-        device: &DeviceImpl,
-        images: &Vec<vk::Image>,
+        device: RawDevice,
+        images: &Vec<Image>,
         format: vk::SurfaceFormatKHR,
-    ) -> Vec<vk::ImageView> {
+    ) -> Vec<ImageView> {
         images
             .iter()
-            .map(|&img| unsafe {
+            .map(|img| unsafe {
                 let info = vk::ImageViewCreateInfo::default()
-                    .image(img)
+                    .image(img.inner.handle)
                     .view_type(vk::ImageViewType::TYPE_2D)
                     .format(format.format)
                     .components(vk::ComponentMapping {
@@ -266,16 +284,23 @@ impl SwapchainImpl {
                         base_mip_level: 0,
                     });
 
-                let view = device
+                let handle = device
                     .handle
                     .create_image_view(&info, None)
                     .expect("Create Image View");
 
-                view
+                let image_view = ImageView {
+                    sampler: None,
+                    inner: ImageViewImpl {
+                        handle,
+                        device: device.clone(),
+                        image: img.inner.clone(),
+                    },
+                };
+                image_view
             })
             .collect()
     }
-
 
     fn create_surface(
         device: &DeviceImpl,
@@ -326,6 +351,14 @@ impl SwapchainImpl {
         })
     }
 
+    pub fn image(&self, frame: Frame) -> &Image {
+        &self.resources.images[frame.index as usize]
+    }
+
+    pub fn view(&self, frame: Frame) -> &ImageView {
+        &self.resources.views[frame.index as usize]
+    }
+
     pub fn present(&mut self, queue: &QueueImpl, frame: Frame) -> Result<bool, GPUError> {
         let finished_semaphore = self.finished[self.frame];
 
@@ -368,6 +401,13 @@ impl Swapchain {
     pub fn present(&mut self, queue: &Queue, frame: Frame) -> Result<bool, GPUError> {
         self.inner.present(&queue.inner, frame)
     }
+    pub fn image(&self, frame: Frame) -> &Image {
+        self.inner.image(frame)
+    }
+
+    pub fn view(&self, frame: Frame) -> &ImageView {
+        self.inner.view(frame)
+    }
 }
 
 impl Device {
@@ -382,9 +422,9 @@ impl Drop for SwapchainImpl {
     fn drop(&mut self) {
         unsafe { self.device.wait_idle() };
         unsafe {
-            for &view in &self.resources.views {
-                self.device.handle.destroy_image_view(view, None);
-            }
+            // for &view in &self.resources.views {
+            //     self.device.handle.destroy_image_view(view, None);
+            // }
             for &semaphore in &self.available {
                 self.device.handle.destroy_semaphore(semaphore, None);
             }
@@ -399,4 +439,3 @@ impl Drop for SwapchainImpl {
         }
     }
 }
-
