@@ -40,13 +40,13 @@ impl DeviceImpl {
         adapter: RawAdapter,
         queue_requests: &[QueueRequest],
     ) -> Result<(RawDevice, Vec<QueueImpl>), GPUError> {
-        let mut pdev_features2 = vk::PhysicalDeviceFeatures2::default().features(
-            vk::PhysicalDeviceFeatures::default()
-                .shader_sampled_image_array_dynamic_indexing(true)
-                .shader_storage_image_array_dynamic_indexing(true)
-                .shader_storage_buffer_array_dynamic_indexing(true)
-                .shader_uniform_buffer_array_dynamic_indexing(true)
-        );
+        // let mut pdev_features2 = vk::PhysicalDeviceFeatures2::default().features(
+        //     vk::PhysicalDeviceFeatures::default()
+        //         .shader_sampled_image_array_dynamic_indexing(true)
+        //         .shader_storage_image_array_dynamic_indexing(true)
+        //         .shader_storage_buffer_array_dynamic_indexing(true)
+        //         .shader_uniform_buffer_array_dynamic_indexing(true)
+        // );
 
         let mut vulkan_1_3_features = vk::PhysicalDeviceVulkan13Features::default()
             .dynamic_rendering(true)
@@ -55,9 +55,6 @@ impl DeviceImpl {
         let mut timeline_semaphore_features =
             vk::PhysicalDeviceTimelineSemaphoreFeatures::default().timeline_semaphore(true);
 
-        let mut dynamic_rendering_features =
-            vk::PhysicalDeviceDynamicRenderingFeatures::default().dynamic_rendering(true);
-
         let mut descriptor_indexing_features =
             vk::PhysicalDeviceDescriptorIndexingFeatures::default()
                 .descriptor_binding_partially_bound(true)
@@ -65,14 +62,14 @@ impl DeviceImpl {
                 .runtime_descriptor_array(true)
                 .descriptor_binding_update_unused_while_pending(true);
 
-        let mut synchronization_two_features =
-            vk::PhysicalDeviceSynchronization2Features::default().synchronization2(true);
+        // let mut synchronization_two_features =
+            // vk::PhysicalDeviceSynchronization2Features::default().synchronization2(true);
 
         let mut device_extensions = vec![
             ash::khr::swapchain::NAME.as_ptr(),
-            ash::khr::timeline_semaphore::NAME.as_ptr(),
-            ash::khr::dynamic_rendering::NAME.as_ptr(),
-            ash::khr::synchronization2::NAME.as_ptr(),
+            // ash::khr::timeline_semaphore::NAME.as_ptr(),
+            // ash::khr::dynamic_rendering::NAME.as_ptr(),
+            // ash::khr::synchronization2::NAME.as_ptr(),
         ];
 
         #[cfg(target_os = "macos")]
@@ -110,12 +107,9 @@ impl DeviceImpl {
         let device_info = vk::DeviceCreateInfo::default()
             .queue_create_infos(&queue_create_infos)
             .enabled_extension_names(&device_extensions)
-            .push_next(&mut pdev_features2)
             .push_next(&mut vulkan_1_3_features)
             .push_next(&mut timeline_semaphore_features)
-            .push_next(&mut dynamic_rendering_features)
-            .push_next(&mut descriptor_indexing_features)
-            .push_next(&mut synchronization_two_features);
+            .push_next(&mut descriptor_indexing_features);
 
         let handle = unsafe { instance.create_device_handle(&device_info, adapter.handle) };
 
