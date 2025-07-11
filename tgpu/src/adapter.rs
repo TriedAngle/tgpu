@@ -3,7 +3,7 @@ use std::sync::Arc;
 use crate::{GPUError, raw::InstanceImpl};
 use ash::vk;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Adapter {
     pub(crate) inner: RawAdapter,
 }

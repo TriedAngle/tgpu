@@ -1,7 +1,7 @@
 use ash::vk;
 use std::sync::Arc;
 
-use crate::{raw::DeviceImpl, DescriptorSetLayout, Device, ShaderFunction};
+use crate::{DescriptorSetLayout, Device, ShaderFunction, raw::DeviceImpl};
 
 pub struct ComputePipelineInfo<'a> {
     pub shader: ShaderFunction<'a>,
@@ -63,19 +63,19 @@ impl Default for RenderPipelineInfo<'_> {
     }
 }
 
-pub trait Pipeline {
-    const BIND_POINT: vk::PipelineBindPoint;
-    const SHADER_STAGE_FLAGS: vk::ShaderStageFlags;
-
-    fn handle(&self) -> vk::Pipeline;
-    fn layout(&self) -> vk::PipelineLayout;
-    fn bind_point(&self) -> vk::PipelineBindPoint {
-        Self::BIND_POINT
-    }
-    fn flags(&self) -> vk::ShaderStageFlags {
-        Self::SHADER_STAGE_FLAGS
-    }
-}
+// pub trait Pipeline {
+//     const BIND_POINT: vk::PipelineBindPoint;
+//     const SHADER_STAGE_FLAGS: vk::ShaderStageFlags;
+//
+//     fn handle(&self) -> vk::Pipeline;
+//     fn layout(&self) -> vk::PipelineLayout;
+//     fn bind_point(&self) -> vk::PipelineBindPoint {
+//         Self::BIND_POINT
+//     }
+//     fn flags(&self) -> vk::ShaderStageFlags {
+//         Self::SHADER_STAGE_FLAGS
+//     }
+// }
 
 pub struct ComputePipeline {
     pub inner: ComputePipelineImpl,
@@ -212,7 +212,6 @@ impl RenderPipelineImpl {
             .base_pipeline_handle(vk::Pipeline::null())
             .push_next(&mut rendering_info);
 
-
         let handle = unsafe {
             device
                 .handle
@@ -330,4 +329,3 @@ impl Drop for RenderPipelineImpl {
         }
     }
 }
-

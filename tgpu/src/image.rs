@@ -252,7 +252,7 @@ impl SamplerImpl {
         };
 
         if let Some(label) = &info.label {
-            unsafe { device.attach_label(label) };
+            unsafe { device.attach_label(handle, label) };
         }
 
         Self { handle, device }
@@ -287,7 +287,7 @@ impl ImageViewImpl {
         };
 
         if let Some(label) = &info.label {
-            unsafe { device.attach_label(label) };
+            unsafe { device.attach_label(handle, label) };
         }
 
         Self {

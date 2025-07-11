@@ -3,8 +3,10 @@ use std::sync::{Arc, atomic::AtomicU64};
 use ash::vk;
 use parking_lot::Mutex;
 
-use crate::{raw::{AdapterImpl, InstanceImpl, RawDevice}, CommandPools, GPUError, Semaphore};
-
+use crate::{
+    CommandPools, GPUError, Semaphore,
+    raw::{AdapterImpl, InstanceImpl, RawDevice},
+};
 
 #[derive(Debug, Clone)]
 pub struct QueueRequest {
@@ -242,4 +244,3 @@ impl QueueImpl {
         }
     }
 }
-

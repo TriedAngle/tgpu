@@ -26,7 +26,10 @@ impl Render {
             engine_name: "Example Engine",
         })?;
 
-        let adapter = instance.adapters(&[])?.next().expect("Adapater");
+        let adapters = instance.adapters(&[])?.collect::<Vec<_>>();
+        println!("adapters: {:#?}", adapters);
+
+        let adapter = adapters[0].clone();
 
         let (device, mut queues) = instance.request_device(
             &tgpu::DeviceCreateInfo {},
@@ -134,6 +137,39 @@ fn fmain(input: VertexOutput) -> @location(0) vec4f {
         // TODO resize
         let mut recorder = self.queue.record();
 
+        {
+            // TODO: finish this
+            let _attachment = vk::RenderingAttachmentInfo::default();
+
+            let _ = recorder.begin_render(&tgpu::RenderInfo {
+                colors: &[],
+                ..Default::default()
+            });
+
+            let viewport = vk::Viewport {
+                width: self.swapchain.extent.width as f32,
+                height: self.swapchain.extent.height as f32,
+                max_depth: 1.0,
+                ..Default::default()
+            };
+
+            let scissor = vk::Rect2D {
+                extent: self.swapchain.extent,
+                ..Default::default()
+            };
+
+            recorder.viewport(viewport);
+            recorder.scissor(scissor);
+
+            recorder.bind_render_pipeline(&self.pipeline);
+            recorder.draw(0..3, 0..1);
+
+            unsafe {
+                let inner_recorder = &mut *recorder.inner.get();
+                inner_recorder.end_rendering();
+            }
+        }
+
         recorder.image_transition(
             self.swapchain.image(frame),
             tgpu::ImageTransition {
@@ -149,7 +185,12 @@ fn fmain(input: VertexOutput) -> @location(0) vec4f {
             ..Default::default()
         });
 
-        let _ = self.swapchain.present(&self.queue, frame);
+        match self.swapchain.present(&self.queue, frame) {
+            Ok(true) | Err(_) => {
+                // TODO swapchain recreation
+            }
+            _ => {}
+        }
 
         Ok(())
     }

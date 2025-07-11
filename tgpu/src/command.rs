@@ -9,7 +9,8 @@ use std::{
 };
 
 use crate::{
-    raw::{ComputePipelineImpl, QueueImpl, RawDevice, RenderPipelineImpl}, ComputePipeline, GPUError, Image, ImageTransition, Queue, RenderPipeline, Semaphore
+    ComputePipeline, GPUError, Image, ImageTransition, Queue, RenderPipeline, Semaphore,
+    raw::{ComputePipelineImpl, QueueImpl, RawDevice, RenderPipelineImpl},
 };
 
 #[derive(Debug)]
@@ -58,6 +59,27 @@ pub struct CommandRecorderImpl {
     pub device: RawDevice,
 }
 
+#[derive(Debug, Copy, Clone)]
+pub struct RenderInfo<'a> {
+    pub area: vk::Rect2D,
+    pub layers: u32,
+    pub colors: &'a [vk::RenderingAttachmentInfo<'a>],
+    pub depth: Option<vk::RenderingAttachmentInfo<'a>>,
+    pub stencil: Option<vk::RenderingAttachmentInfo<'a>>,
+}
+
+impl Default for RenderInfo<'_> {
+    fn default() -> Self {
+        Self {
+            area: vk::Rect2D::default(),
+            layers: 1,
+            colors: &[],
+            depth: None,
+            stencil: None,
+        }
+    }
+}
+
 impl CommandRecorder {
     pub fn finish(&mut self) -> CommandBuffer {
         let inner = unsafe { &mut *self.inner.get() };
@@ -88,17 +110,18 @@ impl CommandRecorder {
     pub fn bind_render_pipeline(&mut self, pipeline: &RenderPipeline) {
         let inner = unsafe { &mut *self.inner.get() };
         let inner_pipeline = &pipeline.inner;
-        unsafe {
-            inner.bind_render_pipeline(inner_pipeline);
-        }
+        unsafe { inner.bind_render_pipeline(inner_pipeline) };
     }
 
     pub fn bind_compute_pipeline(&mut self, pipeline: &ComputePipeline) {
         let inner = unsafe { &mut *self.inner.get() };
         let inner_pipeline = &pipeline.inner;
-        unsafe {
-            inner.bind_compute_pipeline(inner_pipeline);
-        }
+        unsafe { inner.bind_compute_pipeline(inner_pipeline) };
+    }
+
+    pub fn begin_render(&mut self, info: &RenderInfo) {
+        let inner = unsafe { &mut *self.inner.get() };
+        unsafe { inner.begin_render(info) };
     }
 }
 impl CommandRecorderImpl {
@@ -146,6 +169,36 @@ impl CommandRecorderImpl {
             self.device
                 .handle
                 .cmd_set_scissor(self.buffer.handle, 0, &[scissor]);
+        }
+    }
+
+    // TODO: return a drop object to automate end
+    pub unsafe fn begin_render(&self, info: &RenderInfo<'_>) {
+        let mut rendering_info = vk::RenderingInfo::default()
+            .render_area(info.area)
+            .layer_count(info.layers)
+            .color_attachments(info.colors);
+
+        if let Some(depth) = &info.depth {
+            rendering_info = rendering_info.depth_attachment(depth)
+        }
+        if let Some(stencil) = &info.stencil {
+            rendering_info = rendering_info.stencil_attachment(stencil)
+        }
+        unsafe {
+            self.device
+                .ext
+                .dynamic
+                .cmd_begin_rendering(self.buffer.handle, &rendering_info);
+        }
+    }
+
+    pub unsafe fn end_rendering(&self) {
+        unsafe {
+            self.device
+                .ext
+                .dynamic
+                .cmd_end_rendering(self.buffer.handle);
         }
     }
 
@@ -197,7 +250,8 @@ impl CommandRecorderImpl {
 
         unsafe {
             self.device
-                .handle
+                .ext
+                .sync2
                 .cmd_pipeline_barrier2(self.buffer.handle, &dependency_info);
         }
     }

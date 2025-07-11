@@ -9,7 +9,7 @@ use parking_lot::Mutex;
 
 use crate::{
     Adapter, CommandPools, GPUError, Instance, Queue, QueueFamilyInfo, QueueRequest, Semaphore,
-    raw::{InstanceImpl, QueueImpl, RawAdapter, RawInstance, RawQueue, SemaphoreImpl},
+    raw::{QueueImpl, RawAdapter, RawInstance, SemaphoreImpl},
 };
 
 #[derive(Debug)]
@@ -20,11 +20,17 @@ pub struct Device {
 
 pub type RawDevice = Arc<DeviceImpl>;
 
+pub struct Extensions {
+    pub debug: ash::ext::debug_utils::Device,
+    pub sync2: ash::khr::synchronization2::Device,
+    pub dynamic: ash::khr::dynamic_rendering::Device,
+}
+
 pub struct DeviceImpl {
     pub handle: ash::Device,
     pub instance: RawInstance,
     pub adapter: RawAdapter,
-    pub debug: ash::ext::debug_utils::Device,
+    pub ext: Extensions,
     pub allocator: Arc<vkm::Allocator>,
 }
 
@@ -40,17 +46,20 @@ impl DeviceImpl {
         adapter: RawAdapter,
         queue_requests: &[QueueRequest],
     ) -> Result<(RawDevice, Vec<QueueImpl>), GPUError> {
-        // let mut pdev_features2 = vk::PhysicalDeviceFeatures2::default().features(
-        //     vk::PhysicalDeviceFeatures::default()
-        //         .shader_sampled_image_array_dynamic_indexing(true)
-        //         .shader_storage_image_array_dynamic_indexing(true)
-        //         .shader_storage_buffer_array_dynamic_indexing(true)
-        //         .shader_uniform_buffer_array_dynamic_indexing(true)
-        // );
+        let mut pdev_features2 = vk::PhysicalDeviceFeatures2::default().features(
+            vk::PhysicalDeviceFeatures::default()
+                .shader_sampled_image_array_dynamic_indexing(true)
+                .shader_storage_image_array_dynamic_indexing(true)
+                .shader_storage_buffer_array_dynamic_indexing(true)
+                .shader_uniform_buffer_array_dynamic_indexing(true),
+        );
 
-        let mut vulkan_1_3_features = vk::PhysicalDeviceVulkan13Features::default()
-            .dynamic_rendering(true)
-            .synchronization2(true);
+        // let mut vulkan_1_3_features = vk::PhysicalDeviceVulkan13Features::default()
+        //     .dynamic_rendering(true)
+        //     .synchronization2(true);
+
+        let mut dynamic_rendering_features =
+            vk::PhysicalDeviceDynamicRenderingFeatures::default().dynamic_rendering(true);
 
         let mut timeline_semaphore_features =
             vk::PhysicalDeviceTimelineSemaphoreFeatures::default().timeline_semaphore(true);
@@ -62,14 +71,16 @@ impl DeviceImpl {
                 .runtime_descriptor_array(true)
                 .descriptor_binding_update_unused_while_pending(true);
 
-        // let mut synchronization_two_features =
-            // vk::PhysicalDeviceSynchronization2Features::default().synchronization2(true);
+        let mut synchronization_two_features =
+            vk::PhysicalDeviceSynchronization2Features::default().synchronization2(true);
 
+        // TODO: once apple engineers actually use their own stuff
+        // we can remove all of them except swapchain
         let mut device_extensions = vec![
             ash::khr::swapchain::NAME.as_ptr(),
-            // ash::khr::timeline_semaphore::NAME.as_ptr(),
-            // ash::khr::dynamic_rendering::NAME.as_ptr(),
-            // ash::khr::synchronization2::NAME.as_ptr(),
+            ash::khr::timeline_semaphore::NAME.as_ptr(),
+            ash::khr::dynamic_rendering::NAME.as_ptr(),
+            ash::khr::synchronization2::NAME.as_ptr(),
         ];
 
         #[cfg(target_os = "macos")]
@@ -107,13 +118,17 @@ impl DeviceImpl {
         let device_info = vk::DeviceCreateInfo::default()
             .queue_create_infos(&queue_create_infos)
             .enabled_extension_names(&device_extensions)
-            .push_next(&mut vulkan_1_3_features)
+            // enable this and remove all other probably once apple swes stop blueskying
+            // .push_next(&mut vulkan_1_3_features)
+            .push_next(&mut dynamic_rendering_features)
+            .push_next(&mut pdev_features2)
             .push_next(&mut timeline_semaphore_features)
+            .push_next(&mut synchronization_two_features)
             .push_next(&mut descriptor_indexing_features);
 
         let handle = unsafe { instance.create_device_handle(&device_info, adapter.handle) };
 
-        let debug = ash::ext::debug_utils::Device::new(&instance.handle, &handle);
+        let ext = unsafe { Self::new_extensions(&instance.handle, &handle) };
 
         let allocator = unsafe {
             vkm::Allocator::new(vkm::AllocatorCreateInfo::new(
@@ -127,7 +142,7 @@ impl DeviceImpl {
             handle,
             instance,
             adapter,
-            debug,
+            ext,
             allocator: Arc::new(allocator),
         };
 
@@ -141,40 +156,15 @@ impl DeviceImpl {
         Ok((new, queues))
     }
 
-    pub unsafe fn set_object_name<T: vk::Handle>(&self, handle: T, name: &str) {
-        let name = std::ffi::CString::new(name).unwrap();
-        let info = vk::DebugUtilsObjectNameInfoEXT::default()
-            .object_handle(handle)
-            .object_name(&name);
+    pub unsafe fn new_extensions(instance: &ash::Instance, device: &ash::Device) -> Extensions {
+        let debug = ash::ext::debug_utils::Device::new(instance, device);
+        let sync2 = ash::khr::synchronization2::Device::new(instance, device);
+        let dynamic = ash::khr::dynamic_rendering::Device::new(instance, device);
 
-        unsafe {
-            self.debug.set_debug_utils_object_name(&info).unwrap();
-        }
-    }
-
-    pub unsafe fn set_object_tag<T: vk::Handle>(&self, handle: T, tag_name: u64, tag_data: &[u8]) {
-        let info = vk::DebugUtilsObjectTagInfoEXT::default()
-            .object_handle(handle)
-            .tag_name(tag_name)
-            .tag(tag_data);
-
-        unsafe {
-            self.debug.set_debug_utils_object_tag(&info).unwrap();
-        }
-    }
-
-    pub unsafe fn set_object_debug_info<T: vk::Handle + Copy>(
-        &self,
-        handle: T,
-        label: Option<&str>,
-        tag: Option<(u64, &[u8])>,
-    ) {
-        if let Some(name) = label {
-            unsafe { self.set_object_name(handle, name) };
-        }
-
-        if let Some((tag_id, tag_data)) = tag {
-            unsafe { self.set_object_tag(handle, tag_id, tag_data) };
+        Extensions {
+            debug,
+            sync2,
+            dynamic,
         }
     }
 

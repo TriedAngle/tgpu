@@ -4,7 +4,7 @@ use vkm::Alloc;
 
 use bitflags;
 
-use crate::{raw::RawDevice, Device, GPUError};
+use crate::{Device, GPUError, raw::RawDevice};
 
 bitflags::bitflags! {
     #[derive(Debug, Clone, Copy)]
@@ -238,4 +238,3 @@ impl Drop for BufferImpl {
         }
     }
 }
-

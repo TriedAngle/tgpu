@@ -2,15 +2,18 @@ use std::{sync::Arc, time::Duration};
 
 use ash::vk;
 
-use crate::{raw::{DeviceImpl, RawDevice}, Device};
+use crate::{
+    Device,
+    raw::{DeviceImpl, RawDevice},
+};
 
 #[derive(Debug, Clone)]
 pub struct Semaphore {
     pub inner: SemaphoreImpl,
 }
 
-pub struct Fence { 
-}
+// pub struct Fence {
+// }
 
 #[derive(Debug, Clone)]
 pub struct SemaphoreImpl {
@@ -45,19 +48,21 @@ impl SemaphoreImpl {
         unsafe { self.device.wait_semaphore(self.handle, value, timeout) };
     }
 
-    pub unsafe fn new_timeline(device: Arc<DeviceImpl>, value: u64) -> Self { 
+    pub unsafe fn new_timeline(device: Arc<DeviceImpl>, value: u64) -> Self {
         let handle = unsafe { device.create_timeline_semaphore(value) };
-        SemaphoreImpl { handle, device: device.clone() } 
+        SemaphoreImpl {
+            handle,
+            device: device.clone(),
+        }
     }
 }
 
-impl Device { 
+impl Device {
     pub fn create_semaphore(&self, value: u64) -> Semaphore {
         let inner = unsafe { SemaphoreImpl::new_timeline(self.inner.clone(), value) };
         Semaphore { inner }
     }
 }
-
 
 impl Drop for SemaphoreImpl {
     fn drop(&mut self) {
@@ -66,4 +71,3 @@ impl Drop for SemaphoreImpl {
         }
     }
 }
-

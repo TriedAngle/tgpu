@@ -24,7 +24,7 @@ pub mod raw {
     pub use crate::buffer::BufferImpl;
     pub use crate::command::{CommandBufferImpl, CommandRecorderImpl};
     pub use crate::device::{DeviceImpl, RawDevice};
-    pub use crate::image::{SamplerImpl, ImageImpl, ImageViewImpl};
+    pub use crate::image::{ImageImpl, ImageViewImpl, SamplerImpl};
     pub use crate::instance::{InstanceImpl, RawInstance};
     pub use crate::pipeline::{ComputePipelineImpl, RenderPipelineImpl};
     pub use crate::queue::{QueueImpl, RawQueue};
@@ -40,7 +40,9 @@ pub use ash::vk::{
     PrimitiveTopology, QueueFlags,
 };
 pub use buffer::{Buffer, BufferInfo, BufferUsage};
-pub use command::{CommandBuffer, CommandPools, CommandRecorder, ThreadCommandPool, SubmitInfo};
+pub use command::{
+    CommandBuffer, CommandPools, CommandRecorder, RenderInfo, SubmitInfo, ThreadCommandPool,
+};
 pub use debug::Label;
 pub use descriptor::{
     DescriptorBinding, DescriptorPool, DescriptorPoolInfo, DescriptorSet, DescriptorSetLayout,
@@ -48,7 +50,8 @@ pub use descriptor::{
 };
 pub use device::{Device, DeviceCreateInfo};
 pub use image::{
-    Image, ImageCreateInfo, ImageView, ImageViewCreateInfo, Sampler, SamplerCreateInfo, ImageTransition, ImageLayout, ImageLayoutTransition
+    Image, ImageCreateInfo, ImageLayout, ImageLayoutTransition, ImageTransition, ImageView,
+    ImageViewCreateInfo, Sampler, SamplerCreateInfo,
 };
 pub use instance::{Instance, InstanceCreateInfo};
 pub use pipeline::{ComputePipeline, ComputePipelineInfo, RenderPipeline, RenderPipelineInfo};

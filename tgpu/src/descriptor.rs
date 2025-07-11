@@ -1,7 +1,7 @@
 use ash::vk;
 use std::sync::Arc;
 
-use crate::{raw::RawDevice, Buffer, Device, ImageView, Sampler};
+use crate::{Buffer, Device, ImageView, Label, Sampler, raw::RawDevice};
 
 #[derive(Clone, Copy, Debug)]
 pub enum DescriptorType {
@@ -64,8 +64,7 @@ impl DescriptorBinding {
 pub struct DescriptorSetLayoutInfo<'a> {
     pub bindings: &'a [DescriptorBinding],
     pub flags: vk::DescriptorSetLayoutCreateFlags,
-    pub label: Option<&'a str>,
-    pub tag: Option<(u64, &'a [u8])>,
+    pub label: Option<Label<'a>>,
 }
 
 impl Default for DescriptorSetLayoutInfo<'_> {
@@ -74,7 +73,6 @@ impl Default for DescriptorSetLayoutInfo<'_> {
             bindings: &[],
             flags: vk::DescriptorSetLayoutCreateFlags::empty(),
             label: None,
-            tag: None,
         }
     }
 }
@@ -90,8 +88,7 @@ pub struct DescriptorPoolInfo<'a> {
     pub max_sets: u32,
     pub layouts: &'a [&'a DescriptorSetLayout],
     pub flags: vk::DescriptorPoolCreateFlags,
-    pub label: Option<&'a str>,
-    pub tag: Option<(u64, &'a [u8])>,
+    pub label: Option<Label<'a>>,
 }
 
 impl Default for DescriptorPoolInfo<'_> {
@@ -101,7 +98,6 @@ impl Default for DescriptorPoolInfo<'_> {
             layouts: &[],
             flags: vk::DescriptorPoolCreateFlags::empty(),
             label: None,
-            tag: None,
         }
     }
 }
@@ -208,10 +204,9 @@ impl Device {
                 .unwrap()
         };
 
-        unsafe {
-            self.inner
-                .set_object_debug_info(handle, info.label, info.tag)
-        };
+        if let Some(label) = &info.label {
+            unsafe { self.inner.attach_label(handle, label) };
+        }
 
         DescriptorSetLayout {
             handle,
@@ -252,10 +247,9 @@ impl Device {
                 .unwrap()
         };
 
-        unsafe {
-            self.inner
-                .set_object_debug_info(handle, info.label, info.tag)
-        };
+        if let Some(label) = &info.label {
+            unsafe { self.inner.attach_label(handle, label) };
+        }
 
         Arc::new(DescriptorPool {
             handle,
