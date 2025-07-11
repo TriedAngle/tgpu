@@ -416,6 +416,7 @@ impl ImageLayoutTransition {
     pub const GENERAL: Self = Self::new(ImageLayout::General);
     pub const COMPUTE: Self = Self::new(ImageLayout::Compute);
     pub const PRESENT: Self = Self::new(ImageLayout::Present);
+    pub const COLOR: Self = Self::new(ImageLayout::Color);
 
     pub const fn new(layout: ImageLayout) -> Self {
         let (stage, access) = layout.infer_stage_flags();
@@ -425,6 +426,7 @@ impl ImageLayoutTransition {
             access,
         }
     }
+
     pub fn custom(
         layout: vk::ImageLayout,
         stage: vk::PipelineStageFlags2,

@@ -27,7 +27,7 @@ impl Render {
         })?;
 
         let adapters = instance.adapters(&[])?.collect::<Vec<_>>();
-        println!("adapters: {:#?}", adapters);
+        // println!("adapters: {:#?}", adapters);
 
         let adapter = adapters[0].clone();
 
@@ -113,6 +113,7 @@ fn fmain(input: VertexOutput) -> @location(0) vec4f {
             topology: tgpu::PrimitiveTopology::TRIANGLE_LIST,
             polygon: tgpu::PolygonMode::FILL,
             front_face: vk::FrontFace::CLOCKWISE,
+            color_formats: &[swapchain.inner.format.format],
             ..Default::default()
         });
 
@@ -131,26 +132,52 @@ fn fmain(input: VertexOutput) -> @location(0) vec4f {
 
     fn render_frame(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let frame = self.swapchain.acquire_next(None)?;
+        log::debug!("Start Frame {:?}", frame.index);
         if frame.suboptimal {
-            // TODO swapchain recreation
+            // TODO: swapchain recreation
         }
-        // TODO resize
         let mut recorder = self.queue.record();
 
         {
-            // TODO: finish this
-            let _attachment = vk::RenderingAttachmentInfo::default();
+            recorder.image_transition(
+                self.swapchain.image(frame),
+                tgpu::ImageTransition {
+                    from: tgpu::ImageLayoutTransition::UNDEFINED,
+                    to: tgpu::ImageLayoutTransition::COLOR,
+                    aspect: vk::ImageAspectFlags::COLOR,
+                    ..Default::default()
+                },
+            );
+
+            let attachment = vk::RenderingAttachmentInfo::default()
+                .image_view(self.swapchain.view(frame).inner.handle)
+                .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+                .load_op(vk::AttachmentLoadOp::CLEAR)
+                .store_op(vk::AttachmentStoreOp::STORE)
+                .clear_value(vk::ClearValue {
+                    color: vk::ClearColorValue {
+                        float32: [0.0, 1.0, 0.0, 0.5],
+                    },
+                });
+
+            recorder.bind_render_pipeline(&self.pipeline);
 
             let _ = recorder.begin_render(&tgpu::RenderInfo {
-                colors: &[],
+                colors: &[attachment],
+                area: vk::Rect2D {
+                    extent: self.swapchain.extent,
+                    ..Default::default()
+                },
                 ..Default::default()
             });
 
             let viewport = vk::Viewport {
+                x: 0.0,
+                y: 0.0,
                 width: self.swapchain.extent.width as f32,
                 height: self.swapchain.extent.height as f32,
+                min_depth: 0.0,
                 max_depth: 1.0,
-                ..Default::default()
             };
 
             let scissor = vk::Rect2D {
@@ -161,9 +188,9 @@ fn fmain(input: VertexOutput) -> @location(0) vec4f {
             recorder.viewport(viewport);
             recorder.scissor(scissor);
 
-            recorder.bind_render_pipeline(&self.pipeline);
             recorder.draw(0..3, 0..1);
 
+            // TODO: remove this after autodrop addition
             unsafe {
                 let inner_recorder = &mut *recorder.inner.get();
                 inner_recorder.end_rendering();
@@ -173,24 +200,35 @@ fn fmain(input: VertexOutput) -> @location(0) vec4f {
         recorder.image_transition(
             self.swapchain.image(frame),
             tgpu::ImageTransition {
-                from: tgpu::ImageLayoutTransition::UNDEFINED,
+                from: tgpu::ImageLayoutTransition::COLOR,
                 to: tgpu::ImageLayoutTransition::PRESENT,
                 aspect: vk::ImageAspectFlags::COLOR,
                 ..Default::default()
             },
         );
 
+        let available_semaphore = self.swapchain.inner.available_semaphore(frame);
+        let finished_semaphore = self.swapchain.inner.finished_semaphore(frame);
+
         self.queue.submit(tgpu::SubmitInfo {
             records: &[recorder.finish()],
+            wait_binary: &[(
+                available_semaphore,
+                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+            )],
+            signal_binary: &[finished_semaphore],
+            fence: Some(self.swapchain.inner.fence(frame)),
             ..Default::default()
         });
 
         match self.swapchain.present(&self.queue, frame) {
             Ok(true) | Err(_) => {
-                // TODO swapchain recreation
+                // TODO: swapchain recreation
             }
             _ => {}
         }
+
+        log::debug!("Finish Frame {:?}", frame.index);
 
         Ok(())
     }
@@ -215,7 +253,7 @@ impl ApplicationHandler for App {
     fn window_event(
         &mut self,
         event_loop: &ActiveEventLoop,
-        window_id: winit::window::WindowId,
+        _window_id: winit::window::WindowId,
         event: WindowEvent,
     ) {
         match event {

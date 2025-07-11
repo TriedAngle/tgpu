@@ -3,8 +3,8 @@ use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 use std::sync::Arc;
 
 use crate::{
-    Device, GPUError, Image, ImageView, Queue,
-    raw::{DeviceImpl, ImageImpl, ImageViewImpl, QueueImpl, RawAdapter, RawDevice},
+    Device, GPUError, Image, ImageView, Queue, Semaphore,
+    raw::{DeviceImpl, ImageImpl, ImageViewImpl, QueueImpl, RawAdapter, RawDevice, SemaphoreImpl},
 };
 
 #[derive(Debug, Copy, Clone)]
@@ -32,6 +32,7 @@ pub struct SwapchainImplResources {
     pub images: Vec<Image>,
     pub views: Vec<ImageView>,
     pub capabilities: vk::SurfaceCapabilitiesKHR,
+    pub device: RawDevice,
 }
 
 pub struct SwapchainImpl {
@@ -41,8 +42,8 @@ pub struct SwapchainImpl {
     pub surface: vk::SurfaceKHR,
     pub surface_loader: ash::khr::surface::Instance,
 
-    pub available: Vec<vk::Semaphore>,
-    pub finished: Vec<vk::Semaphore>,
+    pub available: Vec<Semaphore>,
+    pub finished: Vec<Semaphore>,
     pub flight: Vec<vk::Fence>,
     pub frame: usize,
 
@@ -81,7 +82,7 @@ impl SwapchainImpl {
         };
 
         let (available, finished, flight) =
-            Self::create_syncs(&device, info.preferred_image_count)?;
+            Self::create_syncs(device.clone(), info.preferred_image_count)?;
 
         let resources = Self::create_resources(
             device.clone(),
@@ -118,37 +119,36 @@ impl SwapchainImpl {
     }
 
     fn create_syncs(
-        device: &DeviceImpl,
+        device: RawDevice,
         max_flight: usize,
-    ) -> Result<(Vec<vk::Semaphore>, Vec<vk::Semaphore>, Vec<vk::Fence>), GPUError> {
+    ) -> Result<(Vec<Semaphore>, Vec<Semaphore>, Vec<vk::Fence>), GPUError> {
         let mut available = Vec::with_capacity(max_flight);
         let mut finished = Vec::with_capacity(max_flight);
         let mut flight = Vec::with_capacity(max_flight);
 
-        let semaphore_info = vk::SemaphoreCreateInfo::default();
         let fence_info = vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED);
 
-        unsafe {
-            for _ in 0..max_flight {
-                let availabe_semaphore = device
-                    .handle
-                    .create_semaphore(&semaphore_info, None)
-                    .map_err(GPUError::from)?;
+        for _ in 0..max_flight {
+            let inner_available = unsafe { SemaphoreImpl::new_signal(device.clone()) };
+            let availabe_semaphore = Semaphore {
+                inner: Arc::new(inner_available),
+            };
 
-                let finished_semaphore = device
-                    .handle
-                    .create_semaphore(&semaphore_info, None)
-                    .map_err(GPUError::from)?;
+            let inner_finished = unsafe { SemaphoreImpl::new_signal(device.clone()) };
+            let finished_semaphore = Semaphore {
+                inner: Arc::new(inner_finished),
+            };
 
-                let flight_fence = device
+            let flight_fence = unsafe {
+                device
                     .handle
                     .create_fence(&fence_info, None)
-                    .map_err(GPUError::from)?;
+                    .map_err(GPUError::from)?
+            };
 
-                available.push(availabe_semaphore);
-                finished.push(finished_semaphore);
-                flight.push(flight_fence);
-            }
+            available.push(availabe_semaphore);
+            finished.push(finished_semaphore);
+            flight.push(flight_fence);
         }
 
         Ok((available, finished, flight))
@@ -246,13 +246,14 @@ impl SwapchainImpl {
             })
             .collect::<Vec<_>>();
 
-        let views = Self::create_image_views(device, &images, format);
+        let views = Self::create_image_views(device.clone(), &images, format);
 
         let resources = SwapchainImplResources {
             handle,
             images,
             views,
             capabilities,
+            device,
         };
 
         Ok(resources)
@@ -321,7 +322,7 @@ impl SwapchainImpl {
 
     pub fn acquire_next(&mut self, timeout: Option<u64>) -> Result<Frame, GPUError> {
         let flight_fence = self.flight[self.frame];
-        let available_semaphore = self.available[self.frame];
+        let available_semaphore = &self.available[self.frame];
 
         unsafe { self.device.wait_fence(flight_fence, timeout) };
         unsafe { self.device.reset_fence(flight_fence) };
@@ -331,7 +332,7 @@ impl SwapchainImpl {
             match self.loader.acquire_next_image(
                 self.resources.handle,
                 timeout_ns,
-                available_semaphore,
+                available_semaphore.inner.handle,
                 vk::Fence::null(),
             ) {
                 Ok((idx, suboptimal)) => (idx, suboptimal),
@@ -360,11 +361,11 @@ impl SwapchainImpl {
     }
 
     pub fn present(&mut self, queue: &QueueImpl, frame: Frame) -> Result<bool, GPUError> {
-        let finished_semaphore = self.finished[self.frame];
+        let finished_semaphore = &self.finished[self.frame];
 
         let swapchains = [self.resources.handle];
         let image_indices = [frame.index];
-        let wait_semaphores = [finished_semaphore];
+        let wait_semaphores = [finished_semaphore.inner.handle];
         let present_info = vk::PresentInfoKHR::default()
             .wait_semaphores(&wait_semaphores)
             .swapchains(&swapchains)
@@ -380,16 +381,16 @@ impl SwapchainImpl {
         Ok(needs_recreation)
     }
 
-    pub fn current_available_semaphore(&self) -> vk::Semaphore {
-        self.available[self.frame]
+    pub fn available_semaphore(&self, frame: Frame) -> &Semaphore {
+        &self.available[frame.index as usize]
     }
 
-    pub fn current_finished_semaphore(&self) -> vk::Semaphore {
-        self.finished[self.frame]
+    pub fn finished_semaphore(&self, frame: Frame) -> &Semaphore {
+        &self.finished[frame.index as usize]
     }
 
-    pub fn current_fence(&self) -> vk::Fence {
-        self.flight[self.frame]
+    pub fn fence(&self, frame: Frame) -> vk::Fence {
+        self.flight[frame.index as usize]
     }
 }
 
@@ -418,19 +419,18 @@ impl Device {
     }
 }
 
+impl Drop for SwapchainImplResources {
+    fn drop(&mut self) {
+        unsafe {
+            self.device.wait_idle();
+        }
+    }
+}
+
 impl Drop for SwapchainImpl {
     fn drop(&mut self) {
-        unsafe { self.device.wait_idle() };
         unsafe {
-            // for &view in &self.resources.views {
-            //     self.device.handle.destroy_image_view(view, None);
-            // }
-            for &semaphore in &self.available {
-                self.device.handle.destroy_semaphore(semaphore, None);
-            }
-            for &semaphore in &self.finished {
-                self.device.handle.destroy_semaphore(semaphore, None);
-            }
+            self.device.wait_idle();
             for &fence in &self.flight {
                 self.device.handle.destroy_fence(fence, None);
             }

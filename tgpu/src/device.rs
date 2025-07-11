@@ -1,7 +1,5 @@
 use std::{
-    collections::HashMap,
-    sync::{Arc, atomic::AtomicU64},
-    time::Duration,
+    collections::HashMap, mem::ManuallyDrop, sync::{atomic::AtomicU64, Arc}, time::Duration
 };
 
 use ash::vk;
@@ -31,7 +29,7 @@ pub struct DeviceImpl {
     pub instance: RawInstance,
     pub adapter: RawAdapter,
     pub ext: Extensions,
-    pub allocator: Arc<vkm::Allocator>,
+    pub allocator: Arc<ManuallyDrop<vkm::Allocator>>,
 }
 
 #[derive(Default)]
@@ -143,7 +141,7 @@ impl DeviceImpl {
             instance,
             adapter,
             ext,
-            allocator: Arc::new(allocator),
+            allocator: Arc::new(ManuallyDrop::new(allocator)),
         };
 
         let new = Arc::new(new);
@@ -180,14 +178,10 @@ impl DeviceImpl {
     }
 
     pub unsafe fn wait_fence(&self, fence: vk::Fence, timeout: Option<u64>) {
-        let (wait_all, wait) = if let Some(timeout) = timeout {
-            (true, timeout)
-        } else {
-            (false, 0)
-        };
+        let timeout = timeout.unwrap_or(u64::MAX);
         unsafe {
             self.handle
-                .wait_for_fences(&[fence], wait_all, wait)
+                .wait_for_fences(&[fence], true, timeout)
                 .expect("Wait for fence")
         }
     }
@@ -196,18 +190,6 @@ impl DeviceImpl {
         unsafe {
             self.handle.reset_fences(&[fence]).expect("Reset Fence");
         }
-    }
-
-    pub unsafe fn create_timeline_semaphore(&self, value: u64) -> vk::Semaphore {
-        let mut sema_type_info = vk::SemaphoreTypeCreateInfo::default()
-            .semaphore_type(vk::SemaphoreType::TIMELINE)
-            .initial_value(value);
-
-        let sema_info = vk::SemaphoreCreateInfo::default().push_next(&mut sema_type_info);
-
-        let semaphore = unsafe { self.handle.create_semaphore(&sema_info, None).unwrap() };
-
-        semaphore
     }
 
     pub unsafe fn get_semaphore_value(&self, handle: vk::Semaphore) -> u64 {
@@ -268,9 +250,9 @@ impl Instance {
             inner: Arc::new(queue),
             pools: CommandPools::new(inner.clone()),
             state: Mutex::new(()),
-            submission_counter: AtomicU64::new(0),
+            submission_counter: AtomicU64::new(1),
             timeline: Semaphore {
-                inner: unsafe { SemaphoreImpl::new_timeline(inner.clone(), 0) },
+                inner: Arc::new(unsafe { SemaphoreImpl::new_timeline(inner.clone(), 0) }),
             },
         });
 
@@ -282,6 +264,8 @@ impl Drop for DeviceImpl {
     fn drop(&mut self) {
         unsafe {
             let _ = self.handle.device_wait_idle();
+            let allocator = Arc::get_mut(&mut self.allocator).expect("Get Allocator");
+            ManuallyDrop::drop(allocator);
             self.handle.destroy_device(None);
         }
     }

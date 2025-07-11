@@ -219,7 +219,7 @@ impl CommandRecorderImpl {
         let (src_stage, src_access) = (transition.from.stage, transition.from.access);
 
         let new_layout = transition.to.layout.into();
-        let (dst_stage, dst_access) = (transition.to.stage, transition.from.access);
+        let (dst_stage, dst_access) = (transition.to.stage, transition.to.access);
 
         let mut barrier = vk::ImageMemoryBarrier2::default()
             .image(image)
@@ -260,10 +260,11 @@ impl CommandRecorderImpl {
 #[derive(Debug)]
 pub struct SubmitInfo<'a> {
     pub records: &'a [CommandBuffer],
-    pub wait_binary: &'a [(Semaphore, vk::PipelineStageFlags)],
-    pub wait_timeline: &'a [(Semaphore, u64, vk::PipelineStageFlags)],
-    pub signal_binary: &'a [Semaphore],
-    pub signal_timeline: &'a [(Semaphore, u64)],
+    pub wait_binary: &'a [(&'a Semaphore, vk::PipelineStageFlags)],
+    pub wait_timeline: &'a [(&'a Semaphore, u64, vk::PipelineStageFlags)],
+    pub signal_binary: &'a [&'a Semaphore],
+    pub signal_timeline: &'a [(&'a Semaphore, u64)],
+    pub fence: Option<vk::Fence>,
 }
 
 impl Default for SubmitInfo<'_> {
@@ -274,6 +275,7 @@ impl Default for SubmitInfo<'_> {
             wait_timeline: &[],
             signal_binary: &[],
             signal_timeline: &[],
+            fence: None,
         }
     }
 }
@@ -354,6 +356,7 @@ impl Queue {
                 &wait_timeline,
                 &signal_binary,
                 &signal_timeline,
+                info.fence.unwrap_or(vk::Fence::null()),
             )
             .unwrap()
     }
@@ -370,6 +373,7 @@ impl QueueImpl {
         wait_timeline: &[(vk::Semaphore, u64, vk::PipelineStageFlags)],
         signal_binary: &[vk::Semaphore],
         signal_timeline: &[(vk::Semaphore, u64)],
+        fence: vk::Fence,
     ) -> Result<u64, GPUError> {
         let timeline_index = timeline.get();
 
@@ -429,7 +433,7 @@ impl QueueImpl {
         unsafe {
             self.device
                 .handle
-                .queue_submit(self.handle, &[submit_info], vk::Fence::null())?;
+                .queue_submit(self.handle, &[submit_info], fence)?;
         }
 
         Ok(submission_index)
@@ -522,6 +526,7 @@ impl ThreadCommandPool {
             freeable
         };
 
+
         if !freeable.is_empty() {
             let mut ready = self.ready.borrow_mut();
             if ready.len() < 10 {
@@ -562,13 +567,13 @@ impl Drop for CommandRecorderImpl {
 impl Drop for CommandPools {
     fn drop(&mut self) {
         for (_thread, pool) in self.pools.get_mut() {
+            unsafe { self.device.wait_idle() };
+
             let ready = pool.ready.borrow();
             let ready = ready.iter().map(|b| b.handle).collect::<Vec<_>>();
 
             let dropped = pool.dropped.borrow();
             let dropped = dropped.iter().map(|b| b.handle).collect::<Vec<_>>();
-
-            unsafe { self.device.wait_idle() };
 
             unsafe {
                 if !ready.is_empty() {
