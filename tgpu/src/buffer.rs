@@ -4,7 +4,7 @@ use vkm::Alloc;
 
 use bitflags;
 
-use crate::{Device, GPUError, raw::RawDevice};
+use crate::{Device, GPUError, Label, raw::RawDevice};
 
 bitflags::bitflags! {
     #[derive(Debug, Clone, Copy)]
@@ -116,9 +116,9 @@ impl Default for BufferUsage {
 
 #[derive(Debug, Default)]
 pub struct BufferInfo<'a> {
-    pub label: Option<&'a str>,
     pub size: u64,
     pub usage: BufferUsage,
+    pub label: Option<Label<'a>>,
 }
 
 #[derive(Debug)]
@@ -201,6 +201,10 @@ impl BufferImpl {
 
         let (handle, allocation) =
             unsafe { device.allocator.create_buffer(&buffer_info, &create_info)? };
+
+        if let Some(label) = &info.label {
+            unsafe { device.attach_label(handle, label) };
+        }
 
         Ok(BufferImpl {
             handle,

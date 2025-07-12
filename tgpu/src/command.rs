@@ -3,6 +3,7 @@ use parking_lot::Mutex;
 use std::{
     cell::{Cell, RefCell, UnsafeCell},
     collections::HashMap,
+    marker::PhantomData,
     ops,
     rc::Rc,
     thread::{self, ThreadId},
@@ -68,6 +69,11 @@ pub struct RenderInfo<'a> {
     pub stencil: Option<vk::RenderingAttachmentInfo<'a>>,
 }
 
+pub struct RenderRecorder<'a> {
+    pub recorder: Rc<UnsafeCell<CommandRecorderImpl>>,
+    _lifetime: PhantomData<&'a ()>,
+}
+
 impl Default for RenderInfo<'_> {
     fn default() -> Self {
         Self {
@@ -87,21 +93,6 @@ impl CommandRecorder {
         CommandBuffer { inner: buffer }
     }
 
-    pub fn viewport(&mut self, viewport: vk::Viewport) {
-        let inner = unsafe { &mut *self.inner.get() };
-        unsafe { inner.viewport(viewport) };
-    }
-
-    pub fn scissor(&mut self, scissor: vk::Rect2D) {
-        let inner = unsafe { &mut *self.inner.get() };
-        unsafe { inner.scissor(scissor) };
-    }
-
-    pub fn draw(&mut self, vertex: ops::Range<u32>, instance: ops::Range<u32>) {
-        let inner = unsafe { &mut *self.inner.get() };
-        unsafe { inner.draw(vertex, instance) };
-    }
-
     pub fn image_transition(&mut self, image: &Image, transition: ImageTransition) {
         let inner = unsafe { &mut *self.inner.get() };
         unsafe { inner.image_transition(image.inner.handle, transition) };
@@ -119,11 +110,50 @@ impl CommandRecorder {
         unsafe { inner.bind_compute_pipeline(inner_pipeline) };
     }
 
-    pub fn begin_render(&mut self, info: &RenderInfo) {
+    pub fn begin_render<'a>(&'a mut self, info: &RenderInfo) -> RenderRecorder<'a> {
         let inner = unsafe { &mut *self.inner.get() };
         unsafe { inner.begin_render(info) };
+        RenderRecorder {
+            recorder: self.inner.clone(),
+            _lifetime: PhantomData,
+        }
     }
 }
+
+impl<'a> RenderRecorder<'a> {
+    pub fn viewport(&mut self, viewport: vk::Viewport) {
+        let inner = unsafe { &mut *self.recorder.get() };
+        unsafe { inner.viewport(viewport) };
+    }
+
+    pub fn scissor(&mut self, scissor: vk::Rect2D) {
+        let inner = unsafe { &mut *self.recorder.get() };
+        unsafe { inner.scissor(scissor) };
+    }
+
+    pub fn draw(&mut self, vertex: ops::Range<u32>, instance: ops::Range<u32>) {
+        let inner = unsafe { &mut *self.recorder.get() };
+        unsafe { inner.draw(vertex, instance) };
+    }
+
+    pub fn image_transition(&mut self, image: &Image, transition: ImageTransition) {
+        let inner = unsafe { &mut *self.recorder.get() };
+        unsafe { inner.image_transition(image.inner.handle, transition) };
+    }
+
+    pub fn bind_render_pipeline(&mut self, pipeline: &RenderPipeline) {
+        let inner = unsafe { &mut *self.recorder.get() };
+        let inner_pipeline = &pipeline.inner;
+        unsafe { inner.bind_render_pipeline(inner_pipeline) };
+    }
+
+    pub fn bind_compute_pipeline(&mut self, pipeline: &ComputePipeline) {
+        let inner = unsafe { &mut *self.recorder.get() };
+        let inner_pipeline = &pipeline.inner;
+        unsafe { inner.bind_compute_pipeline(inner_pipeline) };
+    }
+}
+
 impl CommandRecorderImpl {
     pub unsafe fn finish(&mut self) -> CommandBufferImpl {
         unsafe {
@@ -526,7 +556,6 @@ impl ThreadCommandPool {
             freeable
         };
 
-
         if !freeable.is_empty() {
             let mut ready = self.ready.borrow_mut();
             if ready.len() < 10 {
@@ -561,6 +590,13 @@ impl Drop for CommandRecorderImpl {
             submission: self.buffer.submission.get(),
         };
         self.pool.retire(buffer);
+    }
+}
+
+impl Drop for RenderRecorder<'_> {
+    fn drop(&mut self) {
+        let inner = unsafe { &mut *self.recorder.get() };
+        unsafe { inner.end_rendering() };
     }
 }
 

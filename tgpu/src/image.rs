@@ -331,6 +331,10 @@ impl ImageImpl {
             allocator: device.allocator.clone(),
         });
 
+        if let Some(label) = &info.label {
+            unsafe { device.attach_label(handle, label) };
+        }
+
         Self {
             handle,
             device,

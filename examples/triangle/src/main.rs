@@ -132,37 +132,39 @@ fn fmain(input: VertexOutput) -> @location(0) vec4f {
 
     fn render_frame(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         let frame = self.swapchain.acquire_next(None)?;
-        log::debug!("Start Frame {:?}", frame.index);
+        log::trace!("Start Frame {:?}", frame.index);
         if frame.suboptimal {
-            // TODO: swapchain recreation
+            log::debug!("recreate swapchain");
+            let _ = self.swapchain.recreate();
+            return Ok(());
         }
         let mut recorder = self.queue.record();
 
-        {
-            recorder.image_transition(
-                self.swapchain.image(frame),
-                tgpu::ImageTransition {
-                    from: tgpu::ImageLayoutTransition::UNDEFINED,
-                    to: tgpu::ImageLayoutTransition::COLOR,
-                    aspect: vk::ImageAspectFlags::COLOR,
-                    ..Default::default()
+        recorder.image_transition(
+            self.swapchain.image(frame),
+            tgpu::ImageTransition {
+                from: tgpu::ImageLayoutTransition::UNDEFINED,
+                to: tgpu::ImageLayoutTransition::COLOR,
+                aspect: vk::ImageAspectFlags::COLOR,
+                ..Default::default()
+            },
+        );
+
+        let attachment = vk::RenderingAttachmentInfo::default()
+            .image_view(self.swapchain.view(frame).inner.handle)
+            .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
+            .load_op(vk::AttachmentLoadOp::CLEAR)
+            .store_op(vk::AttachmentStoreOp::STORE)
+            .clear_value(vk::ClearValue {
+                color: vk::ClearColorValue {
+                    float32: [0.0, 1.0, 0.0, 0.5],
                 },
-            );
+            });
 
-            let attachment = vk::RenderingAttachmentInfo::default()
-                .image_view(self.swapchain.view(frame).inner.handle)
-                .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-                .load_op(vk::AttachmentLoadOp::CLEAR)
-                .store_op(vk::AttachmentStoreOp::STORE)
-                .clear_value(vk::ClearValue {
-                    color: vk::ClearColorValue {
-                        float32: [0.0, 1.0, 0.0, 0.5],
-                    },
-                });
+        recorder.bind_render_pipeline(&self.pipeline);
 
-            recorder.bind_render_pipeline(&self.pipeline);
-
-            let _ = recorder.begin_render(&tgpu::RenderInfo {
+        {
+            let mut render = recorder.begin_render(&tgpu::RenderInfo {
                 colors: &[attachment],
                 area: vk::Rect2D {
                     extent: self.swapchain.extent,
@@ -185,16 +187,10 @@ fn fmain(input: VertexOutput) -> @location(0) vec4f {
                 ..Default::default()
             };
 
-            recorder.viewport(viewport);
-            recorder.scissor(scissor);
+            render.viewport(viewport);
+            render.scissor(scissor);
 
-            recorder.draw(0..3, 0..1);
-
-            // TODO: remove this after autodrop addition
-            unsafe {
-                let inner_recorder = &mut *recorder.inner.get();
-                inner_recorder.end_rendering();
-            }
+            render.draw(0..3, 0..1);
         }
 
         recorder.image_transition(
@@ -223,12 +219,15 @@ fn fmain(input: VertexOutput) -> @location(0) vec4f {
 
         match self.swapchain.present(&self.queue, frame) {
             Ok(true) | Err(_) => {
+                log::debug!("recreate swapchain");
+                let _ = self.swapchain.recreate();
+                return Ok(());
                 // TODO: swapchain recreation
             }
             _ => {}
         }
 
-        log::debug!("Finish Frame {:?}", frame.index);
+        log::trace!("Finish Frame {:?}", frame.index);
 
         Ok(())
     }

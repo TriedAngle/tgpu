@@ -1,5 +1,8 @@
 use std::{
-    collections::HashMap, mem::ManuallyDrop, sync::{atomic::AtomicU64, Arc}, time::Duration
+    collections::HashMap,
+    mem::ManuallyDrop,
+    sync::{Arc, atomic::AtomicU64},
+    time::Duration,
 };
 
 use ash::vk;

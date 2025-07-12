@@ -84,11 +84,15 @@ impl SemaphoreImpl {
 impl Device {
     pub fn create_semaphore(&self, value: u64) -> Semaphore {
         let inner = unsafe { SemaphoreImpl::new_timeline(self.inner.clone(), value) };
-        Semaphore { inner: Arc::new(inner) }
+        Semaphore {
+            inner: Arc::new(inner),
+        }
     }
     pub fn create_signal_semaphore(&self) -> Semaphore {
         let inner = unsafe { SemaphoreImpl::new_signal(self.inner.clone()) };
-        Semaphore { inner: Arc::new(inner) }
+        Semaphore {
+            inner: Arc::new(inner),
+        }
     }
 }
 

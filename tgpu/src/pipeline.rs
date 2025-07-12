@@ -1,15 +1,14 @@
 use ash::vk;
 use std::sync::Arc;
 
-use crate::{DescriptorSetLayout, Device, ShaderFunction, raw::DeviceImpl};
+use crate::{DescriptorSetLayout, Device, Label, ShaderFunction, raw::DeviceImpl};
 
 pub struct ComputePipelineInfo<'a> {
     pub shader: ShaderFunction<'a>,
     pub descriptor_layouts: &'a [&'a DescriptorSetLayout],
     pub push_constant_size: Option<u32>,
     pub cache: Option<vk::PipelineCache>,
-    pub label: Option<&'a str>,
-    pub tag: Option<(u64, &'a [u8])>,
+    pub label: Option<Label<'a>>,
 }
 
 impl Default for ComputePipelineInfo<'_> {
@@ -20,7 +19,6 @@ impl Default for ComputePipelineInfo<'_> {
             push_constant_size: None,
             cache: None,
             label: None,
-            tag: None,
         }
     }
 }
@@ -38,8 +36,7 @@ pub struct RenderPipelineInfo<'a> {
     pub polygon: vk::PolygonMode,
     pub cull: vk::CullModeFlags,
     pub front_face: vk::FrontFace,
-    pub label: Option<&'a str>,
-    pub tag: Option<(u64, &'a [u8])>,
+    pub label: Option<Label<'a>>,
 }
 
 impl Default for RenderPipelineInfo<'_> {
@@ -58,24 +55,9 @@ impl Default for RenderPipelineInfo<'_> {
             cull: vk::CullModeFlags::NONE,
             front_face: vk::FrontFace::COUNTER_CLOCKWISE,
             label: None,
-            tag: None,
         }
     }
 }
-
-// pub trait Pipeline {
-//     const BIND_POINT: vk::PipelineBindPoint;
-//     const SHADER_STAGE_FLAGS: vk::ShaderStageFlags;
-//
-//     fn handle(&self) -> vk::Pipeline;
-//     fn layout(&self) -> vk::PipelineLayout;
-//     fn bind_point(&self) -> vk::PipelineBindPoint {
-//         Self::BIND_POINT
-//     }
-//     fn flags(&self) -> vk::ShaderStageFlags {
-//         Self::SHADER_STAGE_FLAGS
-//     }
-// }
 
 pub struct ComputePipeline {
     pub inner: ComputePipelineImpl,
@@ -219,7 +201,9 @@ impl RenderPipelineImpl {
                 .unwrap()[0]
         };
 
-        // device.set_object_debug_info(handle, info.label, info.tag);
+        if let Some(label) = &info.label {
+            unsafe { device.attach_label(handle, label) };
+        }
 
         RenderPipelineImpl {
             handle,
@@ -278,7 +262,9 @@ impl ComputePipelineImpl {
                 .unwrap()[0]
         };
 
-        // self.set_object_debug_info(handle, info.label, info.tag);
+        if let Some(label) = &info.label {
+            unsafe { device.attach_label(handle, label) };
+        }
 
         ComputePipelineImpl {
             handle,
@@ -304,11 +290,11 @@ impl Device {
 impl Drop for ComputePipelineImpl {
     fn drop(&mut self) {
         unsafe {
+            self.device.handle.destroy_pipeline(self.handle, None);
             self.device.handle.destroy_shader_module(self.shader, None);
             self.device
                 .handle
                 .destroy_pipeline_layout(self.layout, None);
-            self.device.handle.destroy_pipeline(self.handle, None);
         }
     }
 }

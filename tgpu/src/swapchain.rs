@@ -32,6 +32,7 @@ pub struct SwapchainImplResources {
     pub images: Vec<Image>,
     pub views: Vec<ImageView>,
     pub capabilities: vk::SurfaceCapabilitiesKHR,
+    pub present_mode: vk::PresentModeKHR,
     pub device: RawDevice,
 }
 
@@ -90,7 +91,8 @@ impl SwapchainImpl {
             surface,
             &surface_loader,
             adapter.handle,
-            &info,
+            info.preferred_image_count as u32,
+            info.preferred_present_mode,
             format,
             None,
         )?;
@@ -160,7 +162,8 @@ impl SwapchainImpl {
         surface_handle: vk::SurfaceKHR,
         surface_loader: &ash::khr::surface::Instance,
         adapter_handle: vk::PhysicalDevice,
-        config: &SwapchainCreateInfo,
+        preferred_image_count: u32,
+        preferred_present_mode: vk::PresentModeKHR,
         format: vk::SurfaceFormatKHR,
         old_swapchain: Option<vk::SwapchainKHR>,
     ) -> Result<SwapchainImplResources, GPUError> {
@@ -172,12 +175,12 @@ impl SwapchainImpl {
 
         let min_images = capabilities.min_image_count;
         let max_images = if capabilities.max_image_count == 0 {
-            config.preferred_image_count as u32
+            preferred_image_count as u32
         } else {
             capabilities.max_image_count
         };
 
-        let image_count = (config.preferred_image_count as u32)
+        let image_count = (preferred_image_count as u32)
             .max(min_images)
             .min(max_images);
 
@@ -186,8 +189,8 @@ impl SwapchainImpl {
                 .get_physical_device_surface_present_modes(adapter_handle, surface_handle)?
         };
 
-        let present_mode = if present_modes.contains(&config.preferred_present_mode) {
-            config.preferred_present_mode
+        let present_mode = if present_modes.contains(&preferred_present_mode) {
+            preferred_present_mode
         } else {
             present_modes
                 .iter()
@@ -253,6 +256,7 @@ impl SwapchainImpl {
             images,
             views,
             capabilities,
+            present_mode,
             device,
         };
 
@@ -392,6 +396,38 @@ impl SwapchainImpl {
     pub fn fence(&self, frame: Frame) -> vk::Fence {
         self.flight[frame.index as usize]
     }
+
+    pub fn recreate(&mut self) -> Result<(), GPUError> {
+        unsafe { self.device.wait_idle() };
+        let new = Self::create_resources(
+            self.device.clone(),
+            &self.loader,
+            self.surface,
+            &self.surface_loader,
+            self.device.adapter.handle,
+            self.resources.images.len() as u32,
+            self.resources.present_mode,
+            self.format,
+            Some(self.resources.handle),
+        )?;
+
+        let (available, finished, flight) =
+            Self::create_syncs(self.device.clone(), self.resources.images.len())?;
+
+        unsafe {
+            self.loader.destroy_swapchain(self.resources.handle, None);
+            for &fence in &self.flight {
+                self.device.handle.destroy_fence(fence, None);
+            }
+        }
+
+        self.resources = new;
+        self.available = available;
+        self.finished = finished;
+        self.flight = flight;
+        self.frame = 0;
+        Ok(())
+    }
 }
 
 impl Swapchain {
@@ -408,6 +444,12 @@ impl Swapchain {
 
     pub fn view(&self, frame: Frame) -> &ImageView {
         self.inner.view(frame)
+    }
+
+    pub fn recreate(&mut self) -> Result<(), GPUError> {
+        self.inner.recreate()?;
+        self.extent = self.inner.resources.capabilities.current_extent;
+        Ok(())
     }
 }
 
