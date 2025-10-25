@@ -19,6 +19,7 @@ pub struct Render {
     buffer: tgpu::Buffer,
     render_image: tgpu::ViewImage,
     pipeline: tgpu::RenderPipeline,
+    frame_count: usize,
 }
 
 impl Render {
@@ -161,6 +162,7 @@ fn fmain(input: VertexOutput) -> @location(0) vec4f {
             buffer,
             render_image,
             pipeline,
+            frame_count: 0,
         };
 
         Ok(new)
@@ -186,6 +188,11 @@ fn fmain(input: VertexOutput) -> @location(0) vec4f {
             },
         );
 
+        let frame_number = self.frame_count as f32;
+
+        let color = (frame_number / 120.0).sin().abs();
+        let invert_color = 1.0 - color;
+
         let attachment = vk::RenderingAttachmentInfo::default()
             .image_view(self.swapchain.view(frame).inner.handle)
             .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
@@ -193,41 +200,42 @@ fn fmain(input: VertexOutput) -> @location(0) vec4f {
             .store_op(vk::AttachmentStoreOp::STORE)
             .clear_value(vk::ClearValue {
                 color: vk::ClearColorValue {
-                    float32: [0.0, 1.0, 0.0, 0.5],
+                    float32: [0.0, invert_color, color, 0.5],
                 },
             });
 
         recorder.bind_render_pipeline(&self.pipeline);
 
-        {
-            let mut render = recorder.begin_render(&tgpu::RenderInfo {
+        recorder.begin_render(
+            &tgpu::RenderInfo {
                 colors: &[attachment],
                 area: vk::Rect2D {
                     extent: self.swapchain.extent(),
                     ..Default::default()
                 },
                 ..Default::default()
-            });
+            },
+            |recorder| {
+                let viewport = vk::Viewport {
+                    x: 0.0,
+                    y: 0.0,
+                    width: self.swapchain.extent().width as f32,
+                    height: self.swapchain.extent().height as f32,
+                    min_depth: 0.0,
+                    max_depth: 1.0,
+                };
 
-            let viewport = vk::Viewport {
-                x: 0.0,
-                y: 0.0,
-                width: self.swapchain.extent().width as f32,
-                height: self.swapchain.extent().height as f32,
-                min_depth: 0.0,
-                max_depth: 1.0,
-            };
+                let scissor = vk::Rect2D {
+                    extent: self.swapchain.extent(),
+                    ..Default::default()
+                };
 
-            let scissor = vk::Rect2D {
-                extent: self.swapchain.extent(),
-                ..Default::default()
-            };
+                recorder.viewport(viewport);
+                recorder.scissor(scissor);
 
-            render.viewport(viewport);
-            render.scissor(scissor);
-
-            render.draw(0..3, 0..1);
-        }
+                recorder.draw(0..3, 0..1);
+            },
+        );
 
         recorder.image_transition(
             self.swapchain.image(frame),
@@ -261,6 +269,8 @@ fn fmain(input: VertexOutput) -> @location(0) vec4f {
             }
             _ => {}
         }
+
+        self.frame_count += 1;
 
         log::trace!("Finish Frame {:?}", frame.index);
 
