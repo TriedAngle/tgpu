@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["examples/particles", "examples/triangle", "tgpu" ] 
+members = ["examples/matmul","examples/particles", "examples/triangle", "tgpu" ] 
 
 [workspace.dependencies]
 ash = { version = "0.38", features = [ "debug", "loaded", "std" ] }

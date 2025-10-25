@@ -38,7 +38,11 @@ pub struct DeviceImpl {
 #[derive(Default)]
 pub struct DeviceCreateInfo {}
 
-impl Device {}
+impl Device {
+    pub fn wait_idle(&self) {
+        unsafe { self.inner.wait_idle() };
+    }
+}
 
 impl DeviceImpl {
     pub fn new(
