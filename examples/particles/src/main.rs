@@ -166,7 +166,7 @@ impl Default for Particle {
     }
 }
 
-const PARTICLE_COUNT: usize = 4000;
+const PARTICLE_COUNT: usize = 10000;
 
 #[allow(unused)]
 pub struct Render {
@@ -300,6 +300,7 @@ impl Render {
 
         let descriptor_set = device.create_descriptor_set(pool.clone(), &layout);
 
+        // TODO: this api is a mess right now
         let present_image = device.create_sampled_image(&tgpu::ViewImageCreateInfo {
             image: &tgpu::ImageCreateInfo {
                 format: swapchain.format(),
@@ -416,7 +417,6 @@ impl Render {
             particles,
             particle_buffer,
             present_image,
-            // pipeline,
             layout,
             pool,
             descriptor_set,
@@ -641,6 +641,8 @@ impl Render {
 #[derive(Default)]
 pub struct App {
     render: Option<Render>,
+    last_frame_instant: Option<std::time::Instant>,
+    smoothed_dt: f32,
 }
 
 impl ApplicationHandler for App {
@@ -652,22 +654,8 @@ impl ApplicationHandler for App {
         window.request_redraw();
         let render = Render::new(window).expect("Create Render");
         self.render = Some(render);
-    }
-
-    fn new_events(&mut self, _event_loop: &ActiveEventLoop, cause: winit::event::StartCause) {
-        if let Some(render) = &mut self.render {
-            match cause {
-                winit::event::StartCause::ResumeTimeReached {
-                    requested_resume, ..
-                } => {
-                    render.pc.dt = requested_resume.elapsed().as_secs_f32();
-                }
-                winit::event::StartCause::Poll => {
-                    render.pc.dt = 1.0 / 10.0;
-                }
-                _ => {}
-            }
-        }
+        self.last_frame_instant = Some(std::time::Instant::now());
+        self.smoothed_dt = 1.0 / 60.0;
     }
 
     fn window_event(
@@ -688,6 +676,25 @@ impl ApplicationHandler for App {
             } => event_loop.exit(),
             WindowEvent::RedrawRequested => {
                 if let Some(render) = &mut self.render {
+                    let now = std::time::Instant::now();
+                    let measured_dt = if let Some(last) = self.last_frame_instant {
+                        (now - last).as_secs_f32()
+                    } else {
+                        1.0 / 60.0
+                    };
+                    self.last_frame_instant = Some(now);
+
+                    let clamped_dt = measured_dt.clamp(1.0 / 240.0, 1.0 / 15.0); // between ~4.17ms and ~66.7ms
+
+                    let alpha = 0.1_f32; // smaller = smoother, larger = more responsive
+                    let dt = if self.smoothed_dt == 0.0 {
+                        clamped_dt
+                    } else {
+                        self.smoothed_dt * (1.0 - alpha) + clamped_dt * alpha
+                    };
+                    self.smoothed_dt = dt;
+
+                    render.pc.dt = dt * 6.0;
                     let _ = render.render_frame();
                     render.window.request_redraw();
                 }
