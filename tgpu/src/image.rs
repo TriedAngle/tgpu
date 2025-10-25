@@ -188,7 +188,7 @@ pub struct ViewImage {
 }
 
 // TODO: detach from vulkan
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct SamplerCreateInfo<'a> {
     pub mag: vk::Filter,
     pub min: vk::Filter,
@@ -201,6 +201,24 @@ pub struct SamplerCreateInfo<'a> {
     pub min_lod: f32,
     pub max_lod: f32,
     pub label: Option<Label<'a>>,
+}
+
+impl<'a> Default for SamplerCreateInfo<'a> {
+    fn default() -> Self {
+        Self {
+            mag: vk::Filter::LINEAR,
+            min: vk::Filter::LINEAR,
+            mipmap: vk::SamplerMipmapMode::LINEAR,
+            address_u: vk::SamplerAddressMode::CLAMP_TO_EDGE,
+            address_v: vk::SamplerAddressMode::CLAMP_TO_EDGE,
+            address_w: vk::SamplerAddressMode::CLAMP_TO_EDGE,
+            anisotropy: None,
+            compare: None,
+            min_lod: 0.0,
+            max_lod: 0.0,
+            label: None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -406,16 +424,19 @@ impl Device {
         } = info;
 
         let image = self.create_image(image_info);
-        let image_view_info = ImageViewCreateInfo {
+
+        let mut image_view_info = ImageViewCreateInfo {
             image: &image,
             options: image_view_options.clone(), // note this is cringe
         };
 
-        let view = self.create_image_view(&image_view_info);
         let mut sampler = None;
         if let Some(sampler_info) = sampler_info {
             sampler = Some(self.create_sampler(sampler_info));
+            image_view_info.options.sampler = sampler.as_ref();
         }
+
+        let view = self.create_image_view(&image_view_info);
 
         ViewImage {
             image,
@@ -479,6 +500,7 @@ impl Default for ImageTransition<'_> {
 impl ImageLayoutTransition {
     pub const UNDEFINED: Self = Self::new(ImageLayout::Undefined);
     pub const GENERAL: Self = Self::new(ImageLayout::General);
+    pub const FRAGMENT: Self = Self::new(ImageLayout::Fragment);
     pub const COMPUTE: Self = Self::new(ImageLayout::Compute);
     pub const PRESENT: Self = Self::new(ImageLayout::Present);
     pub const COLOR: Self = Self::new(ImageLayout::Color);

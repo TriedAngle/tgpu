@@ -37,7 +37,7 @@ pub use allocations::Allocation;
 pub use ash;
 pub use ash::vk::{
     ColorSpaceKHR, CullModeFlags, Format, FrontFace, PolygonMode, PresentModeKHR,
-    PrimitiveTopology, QueueFlags,
+    PrimitiveTopology, QueueFlags, ShaderStageFlags,
 };
 pub use buffer::{Buffer, BufferInfo, BufferUsage};
 pub use command::{

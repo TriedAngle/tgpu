@@ -116,7 +116,7 @@ impl Default for BufferUsage {
 
 #[derive(Debug, Default)]
 pub struct BufferInfo<'a> {
-    pub size: u64,
+    pub size: usize,
     pub usage: BufferUsage,
     pub label: Option<Label<'a>>,
 }
@@ -125,7 +125,7 @@ pub struct BufferInfo<'a> {
 pub struct BufferImpl {
     pub handle: vk::Buffer,
     pub allocation: UnsafeCell<vkm::Allocation>,
-    pub size: u64,
+    pub size: usize,
     pub usage: BufferUsage,
     pub device: RawDevice,
 }
@@ -133,7 +133,7 @@ pub struct BufferImpl {
 #[derive(Debug, Clone)]
 pub struct Buffer {
     pub inner: Arc<BufferImpl>,
-    pub size: u64,
+    pub size: usize,
     pub usage: BufferUsage,
 }
 
@@ -188,7 +188,7 @@ impl BufferImpl {
         };
 
         let buffer_info = vk::BufferCreateInfo::default()
-            .size(info.size)
+            .size(info.size as u64)
             .sharing_mode(sharing)
             .usage(info.usage.into());
 

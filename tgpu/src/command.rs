@@ -9,8 +9,8 @@ use std::{
 };
 
 use crate::{
-    BlitImageInfo, ComputePipeline, CopyImageInfo, GPUError, Image, ImageTransition, Queue,
-    RenderPipeline, Semaphore,
+    BlitImageInfo, ComputePipeline, CopyImageInfo, DescriptorSet, GPUError, Image, ImageTransition,
+    Queue, RenderPipeline, Semaphore,
     raw::{ComputePipelineImpl, QueueImpl, RawDevice, RenderPipelineImpl},
 };
 
@@ -133,6 +133,51 @@ impl CommandRecorder {
     pub fn blit_image(&mut self, info: &BlitImageInfo<'_>) {
         let inner = unsafe { &mut *self.inner.get() };
         unsafe { inner.blit_image(info) };
+    }
+
+    pub fn bind_compute_descriptor_set(
+        &self,
+        set: &DescriptorSet,
+        pipeline: &ComputePipeline,
+        index: u32,
+        offsets: &[u32],
+    ) {
+        let inner = unsafe { &mut *self.inner.get() };
+        unsafe {
+            inner.bind_compute_descriptor_set(set, &pipeline.inner, index, offsets);
+        }
+    }
+
+    pub fn push_compute_constants<T: bytemuck::Pod>(&mut self, pipeline: &ComputePipeline, pc: T) {
+        let inner = unsafe { &mut *self.inner.get() };
+        unsafe {
+            inner.push_compute_constants(&pipeline.inner, pc);
+        }
+    }
+
+    pub fn bind_render_descriptor_set(
+        &self,
+        set: &DescriptorSet,
+        pipeline: &RenderPipeline,
+        index: u32,
+        offsets: &[u32],
+    ) {
+        let inner = unsafe { &mut *self.inner.get() };
+        unsafe {
+            inner.bind_render_descriptor_set(set, &pipeline.inner, index, offsets);
+        }
+    }
+
+    pub fn push_render_constants<T: bytemuck::Pod>(&mut self, pipeline: &RenderPipeline, pc: T) {
+        let inner = unsafe { &mut *self.inner.get() };
+        unsafe {
+            inner.push_render_constants(&pipeline.inner, pc);
+        }
+    }
+
+    pub fn dispatch(&mut self, x: u32, y: u32, z: u32) {
+        let inner = unsafe { &mut *self.inner.get() };
+        unsafe { inner.dispatch(x, y, z) };
     }
 }
 
@@ -307,7 +352,6 @@ impl CommandRecorderImpl {
         }
 
         if info.regions.len() == 1 {
-            // stack-allocate the single region
             let r = &info.regions[0];
             let single = [vk::ImageCopy2::default()
                 .src_subresource(r.src_subresource)
@@ -329,7 +373,6 @@ impl CommandRecorderImpl {
                     .cmd_copy_image2(self.buffer.handle, &copy_info2);
             }
         } else {
-            // fall back to Vec for multiple regions
             let regions2: Vec<vk::ImageCopy2> = info
                 .regions
                 .iter()
@@ -364,7 +407,6 @@ impl CommandRecorderImpl {
         }
 
         if info.regions.len() == 1 {
-            // stack-allocate the single region
             let r = &info.regions[0];
             let single = [vk::ImageBlit2::default()
                 .src_subresource(r.src_subresource)
@@ -386,7 +428,6 @@ impl CommandRecorderImpl {
                     .cmd_blit_image2(self.buffer.handle, &blit_info2);
             }
         } else {
-            // fall back to Vec for multiple regions
             let regions2: Vec<vk::ImageBlit2> = info
                 .regions
                 .iter()
@@ -412,6 +453,81 @@ impl CommandRecorderImpl {
                     .handle
                     .cmd_blit_image2(self.buffer.handle, &blit_info2);
             }
+        }
+    }
+    pub unsafe fn bind_compute_descriptor_set(
+        &self,
+        set: &DescriptorSet,
+        pipeline: &ComputePipelineImpl,
+        index: u32,
+        offsets: &[u32],
+    ) {
+        unsafe {
+            self.device.handle.cmd_bind_descriptor_sets(
+                self.buffer.handle,
+                vk::PipelineBindPoint::COMPUTE,
+                pipeline.layout,
+                index,
+                &[set.handle],
+                offsets,
+            );
+        }
+    }
+
+    pub unsafe fn push_compute_constants<T: bytemuck::Pod>(
+        &mut self,
+        pipeline: &ComputePipelineImpl,
+        pc: T,
+    ) {
+        unsafe {
+            self.device.handle.cmd_push_constants(
+                self.buffer.handle,
+                pipeline.layout,
+                vk::ShaderStageFlags::COMPUTE,
+                0,
+                bytemuck::cast_slice(&[pc]),
+            );
+        }
+    }
+
+    pub unsafe fn bind_render_descriptor_set(
+        &self,
+        set: &DescriptorSet,
+        pipeline: &RenderPipelineImpl,
+        index: u32,
+        offsets: &[u32],
+    ) {
+        unsafe {
+            self.device.handle.cmd_bind_descriptor_sets(
+                self.buffer.handle,
+                vk::PipelineBindPoint::GRAPHICS,
+                pipeline.layout,
+                index,
+                &[set.handle],
+                offsets,
+            );
+        }
+    }
+
+    pub unsafe fn push_render_constants<T: bytemuck::Pod>(
+        &mut self,
+        pipeline: &RenderPipelineImpl,
+        pc: T,
+    ) {
+        unsafe {
+            self.device.handle.cmd_push_constants(
+                self.buffer.handle,
+                pipeline.layout,
+                vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
+                0,
+                bytemuck::cast_slice(&[pc]),
+            );
+        }
+    }
+
+    pub unsafe fn dispatch(&mut self, x: u32, y: u32, z: u32) {
+        unsafe {
+            self.device.handle.cmd_dispatch(self.buffer.handle, x, y, z);
         }
     }
 }

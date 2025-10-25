@@ -9,15 +9,14 @@ use winit::{
     window::Window,
 };
 
+#[allow(unused)]
 pub struct Render {
     window: Window,
-    #[allow(unused)]
     instance: tgpu::Instance,
     device: tgpu::Device,
     queue: tgpu::Queue,
     swapchain: tgpu::Swapchain,
     buffer: tgpu::Buffer,
-    render_image: tgpu::ViewImage,
     pipeline: tgpu::RenderPipeline,
     frame_count: usize,
 }
@@ -47,6 +46,7 @@ impl Render {
 
         let queue = queues.next().unwrap();
 
+        // TODO: use this buffer
         let buffer = device.create_buffer(&tgpu::BufferInfo {
             label: Some(tgpu::Label::Name("test")),
             size: 420,
@@ -71,39 +71,6 @@ impl Render {
                     .unwrap_or(formats[0])
             }),
         })?;
-
-        let render_image = device.create_sampled_image(&tgpu::ViewImageCreateInfo {
-            image: &tgpu::ImageCreateInfo {
-                format: swapchain.format(),
-                ty: vk::ImageType::TYPE_2D,
-                volume: vk::Extent3D {
-                    width: swapchain.extent().width,
-                    height: swapchain.extent().height,
-                    depth: 1,
-                },
-                mips: 1,
-                layers: 1,
-                samples: vk::SampleCountFlags::TYPE_1,
-                tiling: vk::ImageTiling::OPTIMAL,
-                usage: tgpu::ImageUsage::COPY_SRC
-                    | tgpu::ImageUsage::COPY_DST
-                    | tgpu::ImageUsage::STORAGE
-                    | tgpu::ImageUsage::COLOR
-                    | tgpu::ImageUsage::DEVICE,
-                ..Default::default()
-            },
-            view: tgpu::ImageViewOptions {
-                sampler: None,                  // TODO: this should be auto
-                ty: vk::ImageViewType::TYPE_2D, // TODO: this should probably be automatic,
-                // investigate this
-                format: Some(swapchain.format()),
-                mips: 0..1,
-                layers: 0..1,
-                aspect: vk::ImageAspectFlags::COLOR,
-                ..Default::default()
-            },
-            sampler: None,
-        });
 
         let shader = device
             .create_shader(
@@ -160,7 +127,6 @@ fn fmain(input: VertexOutput) -> @location(0) vec4f {
             queue,
             swapchain,
             buffer,
-            render_image,
             pipeline,
             frame_count: 0,
         };

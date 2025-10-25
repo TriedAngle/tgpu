@@ -371,7 +371,6 @@ impl DescriptorSet {
             }
         }
 
-        // Create descriptor writes for buffers
         for (binding, descriptor_type, buffer_info, array_element) in &buffer_infos {
             vk_writes.push(
                 vk::WriteDescriptorSet::default()
@@ -383,7 +382,6 @@ impl DescriptorSet {
             );
         }
 
-        // Create descriptor writes for images
         for (binding, descriptor_type, image_info, array_element) in &image_infos {
             vk_writes.push(
                 vk::WriteDescriptorSet::default()
