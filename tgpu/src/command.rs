@@ -10,7 +10,8 @@ use std::{
 };
 
 use crate::{
-    ComputePipeline, GPUError, Image, ImageTransition, Queue, RenderPipeline, Semaphore,
+    BlitImageInfo, ComputePipeline, CopyImageInfo, GPUError, Image, ImageTransition, Queue,
+    RenderPipeline, Semaphore,
     raw::{ComputePipelineImpl, QueueImpl, RawDevice, RenderPipelineImpl},
 };
 
@@ -110,6 +111,7 @@ impl CommandRecorder {
         unsafe { inner.bind_compute_pipeline(inner_pipeline) };
     }
 
+    // TODO: investigate if using a block instead of a new return value wouldn't be better here?
     pub fn begin_render<'a>(&'a mut self, info: &RenderInfo) -> RenderRecorder<'a> {
         let inner = unsafe { &mut *self.inner.get() };
         unsafe { inner.begin_render(info) };
@@ -117,6 +119,16 @@ impl CommandRecorder {
             recorder: self.inner.clone(),
             _lifetime: PhantomData,
         }
+    }
+
+    pub fn copy_image(&mut self, info: &CopyImageInfo<'_>) {
+        let inner = unsafe { &mut *self.inner.get() };
+        unsafe { inner.copy_image(info) };
+    }
+
+    pub fn blit_image(&mut self, info: &BlitImageInfo<'_>) {
+        let inner = unsafe { &mut *self.inner.get() };
+        unsafe { inner.blit_image(info) };
     }
 }
 
@@ -202,7 +214,6 @@ impl CommandRecorderImpl {
         }
     }
 
-    // TODO: return a drop object to automate end
     pub unsafe fn begin_render(&self, info: &RenderInfo<'_>) {
         let mut rendering_info = vk::RenderingInfo::default()
             .render_area(info.area)
@@ -283,6 +294,120 @@ impl CommandRecorderImpl {
                 .ext
                 .sync2
                 .cmd_pipeline_barrier2(self.buffer.handle, &dependency_info);
+        }
+    }
+
+    pub unsafe fn copy_image(&self, info: &CopyImageInfo<'_>) {
+        if info.regions.is_empty() {
+            return;
+        }
+
+        if info.regions.len() == 1 {
+            // stack-allocate the single region
+            let r = &info.regions[0];
+            let single = [vk::ImageCopy2::default()
+                .src_subresource(r.src_subresource)
+                .src_offset(r.src_offset)
+                .dst_subresource(r.dst_subresource)
+                .dst_offset(r.dst_offset)
+                .extent(r.extent)];
+
+            let copy_info2 = vk::CopyImageInfo2::default()
+                .src_image(info.src.inner.handle)
+                .src_image_layout(info.src_layout.into())
+                .dst_image(info.dst.inner.handle)
+                .dst_image_layout(info.dst_layout.into())
+                .regions(&single);
+
+            unsafe {
+                self.device
+                    .handle
+                    .cmd_copy_image2(self.buffer.handle, &copy_info2);
+            }
+        } else {
+            // fall back to Vec for multiple regions
+            let regions2: Vec<vk::ImageCopy2> = info
+                .regions
+                .iter()
+                .map(|r| {
+                    vk::ImageCopy2::default()
+                        .src_subresource(r.src_subresource)
+                        .src_offset(r.src_offset)
+                        .dst_subresource(r.dst_subresource)
+                        .dst_offset(r.dst_offset)
+                        .extent(r.extent)
+                })
+                .collect();
+
+            let copy_info2 = vk::CopyImageInfo2::default()
+                .src_image(info.src.inner.handle)
+                .src_image_layout(info.src_layout.into())
+                .dst_image(info.dst.inner.handle)
+                .dst_image_layout(info.dst_layout.into())
+                .regions(&regions2);
+
+            unsafe {
+                self.device
+                    .handle
+                    .cmd_copy_image2(self.buffer.handle, &copy_info2)
+            };
+        }
+    }
+
+    pub unsafe fn blit_image(&self, info: &BlitImageInfo<'_>) {
+        if info.regions.is_empty() {
+            return;
+        }
+
+        if info.regions.len() == 1 {
+            // stack-allocate the single region
+            let r = &info.regions[0];
+            let single = [vk::ImageBlit2::default()
+                .src_subresource(r.src_subresource)
+                .src_offsets(r.src_offsets)
+                .dst_subresource(r.dst_subresource)
+                .dst_offsets(r.dst_offsets)];
+
+            let blit_info2 = vk::BlitImageInfo2::default()
+                .src_image(info.src.inner.handle)
+                .src_image_layout(info.src_layout.into())
+                .dst_image(info.dst.inner.handle)
+                .dst_image_layout(info.dst_layout.into())
+                .regions(&single)
+                .filter(info.filter);
+
+            unsafe {
+                self.device
+                    .handle
+                    .cmd_blit_image2(self.buffer.handle, &blit_info2);
+            }
+        } else {
+            // fall back to Vec for multiple regions
+            let regions2: Vec<vk::ImageBlit2> = info
+                .regions
+                .iter()
+                .map(|r| {
+                    vk::ImageBlit2::default()
+                        .src_subresource(r.src_subresource)
+                        .src_offsets(r.src_offsets)
+                        .dst_subresource(r.dst_subresource)
+                        .dst_offsets(r.dst_offsets)
+                })
+                .collect();
+
+            let blit_info2 = vk::BlitImageInfo2::default()
+                .src_image(info.src.inner.handle)
+                .src_image_layout(info.src_layout.into())
+                .dst_image(info.dst.inner.handle)
+                .dst_image_layout(info.dst_layout.into())
+                .regions(&regions2)
+                .filter(info.filter);
+
+            unsafe {
+                self.device
+                    .handle
+                    .cmd_blit_image2(self.buffer.handle, &blit_info2);
+            }
         }
     }
 }

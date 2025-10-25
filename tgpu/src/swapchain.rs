@@ -15,7 +15,6 @@ pub struct Frame {
 
 pub struct Swapchain {
     pub inner: SwapchainImpl,
-    pub extent: vk::Extent2D, // TODO: make this own type
 }
 
 pub struct SwapchainCreateInfo {
@@ -431,33 +430,46 @@ impl SwapchainImpl {
 }
 
 impl Swapchain {
+    #[inline]
     pub fn acquire_next(&mut self, timeout: Option<u64>) -> Result<Frame, GPUError> {
         self.inner.acquire_next(timeout)
     }
 
+    #[inline]
     pub fn present(&mut self, queue: &Queue, frame: Frame) -> Result<bool, GPUError> {
         self.inner.present(&queue.inner, frame)
     }
+
+    #[inline]
     pub fn image(&self, frame: Frame) -> &Image {
         self.inner.image(frame)
     }
 
+    #[inline]
     pub fn view(&self, frame: Frame) -> &ImageView {
         self.inner.view(frame)
     }
 
     pub fn recreate(&mut self) -> Result<(), GPUError> {
         self.inner.recreate()?;
-        self.extent = self.inner.resources.capabilities.current_extent;
         Ok(())
+    }
+
+    #[inline]
+    pub fn format(&self) -> vk::Format {
+        self.inner.format.format
+    }
+
+    #[inline]
+    pub fn extent(&self) -> vk::Extent2D {
+        self.inner.resources.capabilities.current_extent
     }
 }
 
 impl Device {
     pub fn create_swapchain(&self, info: &SwapchainCreateInfo) -> Result<Swapchain, GPUError> {
         let inner = SwapchainImpl::new(self.inner.clone(), info)?;
-        let extent = inner.resources.capabilities.current_extent;
-        Ok(Swapchain { inner, extent })
+        Ok(Swapchain { inner })
     }
 }
 

@@ -11,11 +11,13 @@ use winit::{
 
 pub struct Render {
     window: Window,
+    #[allow(unused)]
     instance: tgpu::Instance,
     device: tgpu::Device,
     queue: tgpu::Queue,
     swapchain: tgpu::Swapchain,
     buffer: tgpu::Buffer,
+    render_image: tgpu::ViewImage,
     pipeline: tgpu::RenderPipeline,
 }
 
@@ -45,7 +47,7 @@ impl Render {
         let queue = queues.next().unwrap();
 
         let buffer = device.create_buffer(&tgpu::BufferInfo {
-            label: Some("test"),
+            label: Some(tgpu::Label::Name("test")),
             size: 420,
             usage: tgpu::BufferUsage::COPY_DST
                 | tgpu::BufferUsage::MAP_WRITE
@@ -68,6 +70,39 @@ impl Render {
                     .unwrap_or(formats[0])
             }),
         })?;
+
+        let render_image = device.create_sampled_image(&tgpu::ViewImageCreateInfo {
+            image: &tgpu::ImageCreateInfo {
+                format: swapchain.format(),
+                ty: vk::ImageType::TYPE_2D,
+                volume: vk::Extent3D {
+                    width: swapchain.extent().width,
+                    height: swapchain.extent().height,
+                    depth: 1,
+                },
+                mips: 1,
+                layers: 1,
+                samples: vk::SampleCountFlags::TYPE_1,
+                tiling: vk::ImageTiling::OPTIMAL,
+                usage: tgpu::ImageUsage::COPY_SRC
+                    | tgpu::ImageUsage::COPY_DST
+                    | tgpu::ImageUsage::STORAGE
+                    | tgpu::ImageUsage::COLOR
+                    | tgpu::ImageUsage::DEVICE,
+                ..Default::default()
+            },
+            view: tgpu::ImageViewOptions {
+                sampler: None,                  // TODO: this should be auto
+                ty: vk::ImageViewType::TYPE_2D, // TODO: this should probably be automatic,
+                // investigate this
+                format: Some(swapchain.format()),
+                mips: 0..1,
+                layers: 0..1,
+                aspect: vk::ImageAspectFlags::COLOR,
+                ..Default::default()
+            },
+            sampler: None,
+        });
 
         let shader = device
             .create_shader(
@@ -106,14 +141,14 @@ fn fmain(input: VertexOutput) -> @location(0) vec4f {
             .expect("Shader");
 
         let pipeline = device.create_render_pipeline(&tgpu::RenderPipelineInfo {
-            label: Some("Present Pipeline"),
+            label: Some(tgpu::Label::Name("Present Pipeline")),
             vertex_shader: shader.entry("vmain"),
             fragment_shader: shader.entry("fmain"),
             cull: tgpu::CullModeFlags::BACK,
             topology: tgpu::PrimitiveTopology::TRIANGLE_LIST,
             polygon: tgpu::PolygonMode::FILL,
             front_face: vk::FrontFace::CLOCKWISE,
-            color_formats: &[swapchain.inner.format.format],
+            color_formats: &[swapchain.format()],
             ..Default::default()
         });
 
@@ -124,6 +159,7 @@ fn fmain(input: VertexOutput) -> @location(0) vec4f {
             queue,
             swapchain,
             buffer,
+            render_image,
             pipeline,
         };
 
@@ -167,7 +203,7 @@ fn fmain(input: VertexOutput) -> @location(0) vec4f {
             let mut render = recorder.begin_render(&tgpu::RenderInfo {
                 colors: &[attachment],
                 area: vk::Rect2D {
-                    extent: self.swapchain.extent,
+                    extent: self.swapchain.extent(),
                     ..Default::default()
                 },
                 ..Default::default()
@@ -176,14 +212,14 @@ fn fmain(input: VertexOutput) -> @location(0) vec4f {
             let viewport = vk::Viewport {
                 x: 0.0,
                 y: 0.0,
-                width: self.swapchain.extent.width as f32,
-                height: self.swapchain.extent.height as f32,
+                width: self.swapchain.extent().width as f32,
+                height: self.swapchain.extent().height as f32,
                 min_depth: 0.0,
                 max_depth: 1.0,
             };
 
             let scissor = vk::Rect2D {
-                extent: self.swapchain.extent,
+                extent: self.swapchain.extent(),
                 ..Default::default()
             };
 
@@ -222,7 +258,6 @@ fn fmain(input: VertexOutput) -> @location(0) vec4f {
                 log::debug!("recreate swapchain");
                 let _ = self.swapchain.recreate();
                 return Ok(());
-                // TODO: swapchain recreation
             }
             _ => {}
         }

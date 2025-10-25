@@ -2,6 +2,7 @@ use ash::vk;
 
 use crate::raw::DeviceImpl;
 
+#[derive(Debug, Clone)]
 pub enum Label<'a> {
     Name(&'a str),
     Tag((u64, &'a [u8])),

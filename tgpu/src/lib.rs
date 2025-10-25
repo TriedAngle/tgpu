@@ -50,8 +50,9 @@ pub use descriptor::{
 };
 pub use device::{Device, DeviceCreateInfo};
 pub use image::{
-    Image, ImageCreateInfo, ImageLayout, ImageLayoutTransition, ImageTransition, ImageView,
-    ImageViewCreateInfo, Sampler, SamplerCreateInfo,
+    BlitImageInfo, CopyImageInfo, Image, ImageCreateInfo, ImageLayout, ImageLayoutTransition,
+    ImageTransition, ImageUsage, ImageView, ImageViewCreateInfo, ImageViewOptions, Sampler,
+    SamplerCreateInfo, ViewImage, ViewImageCreateInfo,
 };
 pub use instance::{Instance, InstanceCreateInfo};
 pub use pipeline::{ComputePipeline, ComputePipelineInfo, RenderPipeline, RenderPipelineInfo};

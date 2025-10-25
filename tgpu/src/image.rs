@@ -7,7 +7,7 @@ use crate::{Allocation, Device, Label, Queue, raw::RawDevice};
 
 // TODO: support custom stuff
 bitflags::bitflags! {
-    #[derive(Debug, Clone, Copy)]
+    #[derive(Debug, Clone, Copy, Default)]
     pub struct ImageUsage: u32 {
         const MAP_READ = 1 << 0;
         const MAP_WRITE = 1 << 1;
@@ -180,14 +180,15 @@ pub struct SamplerImpl {
     pub device: RawDevice,
 }
 
-// TODO: maybe have this as a helper?
-// pub struct SampledImage {
-//     pub image: Image,
-//     pub sampler: Sampler,
-//     pub view: ImageView,
-// }
+#[derive(Debug, Clone)]
+pub struct ViewImage {
+    pub image: Image,
+    pub sampler: Option<Sampler>,
+    pub view: ImageView,
+}
 
 // TODO: detach from vulkan
+#[derive(Debug, Clone, Default)]
 pub struct SamplerCreateInfo<'a> {
     pub mag: vk::Filter,
     pub min: vk::Filter,
@@ -202,8 +203,8 @@ pub struct SamplerCreateInfo<'a> {
     pub label: Option<Label<'a>>,
 }
 
-pub struct ImageViewCreateInfo<'a> {
-    pub image: &'a Image,
+#[derive(Debug, Clone, Default)]
+pub struct ImageViewOptions<'a> {
     pub sampler: Option<&'a Sampler>,
     pub ty: vk::ImageViewType,
     pub format: Option<vk::Format>,
@@ -214,17 +215,51 @@ pub struct ImageViewCreateInfo<'a> {
     pub label: Option<Label<'a>>,
 }
 
+#[derive(Debug, Clone)]
+pub struct ImageViewCreateInfo<'a> {
+    pub image: &'a Image,
+    pub options: ImageViewOptions<'a>,
+}
+
+#[derive(Debug, Default)]
 pub struct ImageCreateInfo<'a> {
     pub format: vk::Format,
     pub ty: vk::ImageType,
     pub volume: vk::Extent3D,
     pub mips: u32,
     pub layers: u32,
+    pub tiling: vk::ImageTiling,
     pub samples: vk::SampleCountFlags,
     pub usage: ImageUsage,
     pub sharing: vk::SharingMode,
     pub layout: ImageLayout,
     pub label: Option<Label<'a>>,
+}
+
+#[derive(Debug)]
+pub struct ViewImageCreateInfo<'a> {
+    pub image: &'a ImageCreateInfo<'a>,
+    pub sampler: Option<&'a SamplerCreateInfo<'a>>,
+    pub view: ImageViewOptions<'a>,
+}
+
+#[derive(Debug, Copy, Clone)]
+pub struct CopyImageInfo<'a> {
+    pub src: &'a Image,
+    pub src_layout: ImageLayout,
+    pub dst: &'a Image,
+    pub dst_layout: ImageLayout,
+    pub regions: &'a [vk::ImageCopy],
+}
+
+#[derive(Debug, Copy, Clone)]
+pub struct BlitImageInfo<'a> {
+    pub src: &'a Image,
+    pub src_layout: ImageLayout,
+    pub dst: &'a Image,
+    pub dst_layout: ImageLayout,
+    pub regions: &'a [vk::ImageBlit],
+    pub filter: vk::Filter,
 }
 
 impl SamplerImpl {
@@ -261,21 +296,22 @@ impl SamplerImpl {
 
 impl ImageViewImpl {
     pub unsafe fn new(device: RawDevice, info: &ImageViewCreateInfo<'_>) -> Self {
+        let options = &info.options;
         let mut create_info = vk::ImageViewCreateInfo::default()
             .image(info.image.inner.handle)
-            .view_type(info.ty)
+            .view_type(options.ty)
             .format(info.image.format)
-            .components(info.swizzle)
+            .components(options.swizzle)
             .subresource_range(
                 vk::ImageSubresourceRange::default()
-                    .aspect_mask(info.aspect)
-                    .base_mip_level(info.mips.start)
-                    .level_count(info.mips.len() as u32)
-                    .base_array_layer(info.layers.start)
-                    .layer_count(info.layers.len() as u32),
+                    .aspect_mask(options.aspect)
+                    .base_mip_level(options.mips.start)
+                    .level_count(options.mips.len() as u32)
+                    .base_array_layer(options.layers.start)
+                    .layer_count(options.layers.len() as u32),
             );
 
-        if let Some(format) = info.format {
+        if let Some(format) = options.format {
             create_info.format = format;
         }
 
@@ -286,7 +322,7 @@ impl ImageViewImpl {
                 .expect("Image View")
         };
 
-        if let Some(label) = &info.label {
+        if let Some(label) = &options.label {
             unsafe { device.attach_label(handle, label) };
         }
 
@@ -352,7 +388,7 @@ impl Device {
     }
     pub fn create_image_view(&self, info: &ImageViewCreateInfo<'_>) -> ImageView {
         let inner = unsafe { ImageViewImpl::new(self.inner.clone(), info) };
-        let sampler = info.sampler.cloned();
+        let sampler = info.options.sampler.cloned();
         ImageView { inner, sampler }
     }
     pub fn create_image(&self, info: &ImageCreateInfo<'_>) -> Image {
@@ -360,6 +396,31 @@ impl Device {
         Image {
             inner: Arc::new(inner),
             format: info.format,
+        }
+    }
+    pub fn create_sampled_image(&self, info: &ViewImageCreateInfo<'_>) -> ViewImage {
+        let ViewImageCreateInfo {
+            image: image_info,
+            view: image_view_options,
+            sampler: sampler_info,
+        } = info;
+
+        let image = self.create_image(image_info);
+        let image_view_info = ImageViewCreateInfo {
+            image: &image,
+            options: image_view_options.clone(), // note this is cringe
+        };
+
+        let view = self.create_image_view(&image_view_info);
+        let mut sampler = None;
+        if let Some(sampler_info) = sampler_info {
+            sampler = Some(self.create_sampler(sampler_info));
+        }
+
+        ViewImage {
+            image,
+            sampler,
+            view,
         }
     }
 }
