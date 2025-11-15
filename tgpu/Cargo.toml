@@ -13,3 +13,4 @@ parking_lot = { workspace = true }
 log = { workspace = true }
 bitflags = { workspace = true }
 bytemuck = { workspace = true }
+tempfile = "3.23.0"

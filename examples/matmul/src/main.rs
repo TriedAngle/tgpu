@@ -1,83 +1,7 @@
 use rand::Rng;
 use tgpu::ash::vk;
 
-const MATMUL_WGSL: &str = r#"
-struct Push {
-    m: u32, // rows of A and C
-    n: u32, // cols of B and C
-    k: u32, // cols of A / rows of B
-}
-
-@group(0) @binding(0)
-var<storage, read>  A: array<f32>;
-@group(0) @binding(1)
-var<storage, read>  B: array<f32>;
-@group(0) @binding(2)
-var<storage, read_write> C: array<f32>;
-
-var<push_constant> pc: Push;
-
-fn idx_a(r: u32, c: u32) -> u32 { return r * pc.k + c; }
-fn idx_b(r: u32, c: u32) -> u32 { return r * pc.n + c; }
-fn idx_c(r: u32, c: u32) -> u32 { return r * pc.n + c; }
-
-const TILE: u32 = 16u;
-
-// Flattened 1D tiles -> avoids nested-array layout issues
-var<workgroup> tileA: array<f32, 512>;
-var<workgroup> tileB: array<f32, 512>;
-
-// 2D -> 1D index helper for tiles
-fn tix(x: u32, y: u32) -> u32 {
-    return y * TILE + x;
-}
-
-@compute @workgroup_size(TILE, TILE, 1)
-fn main(@builtin(local_invocation_id)  lid: vec3<u32>,
-        @builtin(global_invocation_id) gid: vec3<u32>) {
-
-    let row = gid.y; // C row
-    let col = gid.x; // C col
-
-    if (row >= pc.m || col >= pc.n) {
-        return;
-    }
-
-    var acc: f32 = 0.0;
-    let numTiles = (pc.k + TILE - 1u) / TILE;
-
-    for (var t: u32 = 0u; t < numTiles; t = t + 1u) {
-        let aCol = t * TILE + lid.x;
-        let bRow = t * TILE + lid.y;
-
-        // Load A tile (row, aCol)
-        if (aCol < pc.k) {
-            tileA[tix(lid.x, lid.y)] = A[idx_a(row, aCol)];
-        } else {
-            tileA[tix(lid.x, lid.y)] = 0.0;
-        }
-
-        // Load B tile (bRow, col)
-        if (bRow < pc.k) {
-            tileB[tix(lid.x, lid.y)] = B[idx_b(bRow, col)];
-        } else {
-            tileB[tix(lid.x, lid.y)] = 0.0;
-        }
-
-        workgroupBarrier();
-
-        // Accumulate for this tile
-        for (var i: u32 = 0u; i < TILE; i = i + 1u) {
-            // tileA[y][i] * tileB[i][x] -> flattened:
-            acc = acc + tileA[tix(i,      lid.y)] * tileB[tix(lid.x, i)];
-        }
-
-        workgroupBarrier();
-    }
-
-    C[idx_c(row, col)] = acc;
-}
-"#;
+const SHADER: &str = include_str!("./shader.slang");
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -130,8 +54,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let queue = queues.next().unwrap();
 
     let usage_rw_host = tgpu::BufferUsage::STORAGE
-        | tgpu::BufferUsage::COPY_DST
-        | tgpu::BufferUsage::COPY_SRC
         | tgpu::BufferUsage::DEVICE
         | tgpu::BufferUsage::COHERENT
         | tgpu::BufferUsage::HOST_VISIBLE
@@ -212,8 +134,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     ]);
 
     let shader = device
-        .create_shader(None, &tgpu::ShaderSource::Wgsl(MATMUL_WGSL))
-        .expect("MatMul WGSL");
+        .create_shader(None, tgpu::ShaderSource::Slang(SHADER.as_bytes()))
+        .expect("MatMul Slang");
+
     let pipeline = device.create_compute_pipeline(&tgpu::ComputePipelineInfo {
         label: Some(tgpu::Label::Name("MatMul Pipeline")),
         shader: shader.entry("main"),

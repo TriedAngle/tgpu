@@ -12,134 +12,6 @@ use winit::{
     window::Window,
 };
 
-const COMPUTE_SHADER: &str = r#"
-struct Particle {
-    position: vec2<f32>,
-    velocity: vec2<f32>,
-    color: vec4<f32>,
-}
-
-struct PushConstants {
-    window: vec2<u32>,
-    mouse: vec2<f32>,
-    delta_time: f32,
-}
-
-@group(0) @binding(0)
-var output_texture: texture_storage_2d<rgba8unorm, read_write>;
-
-@group(0) @binding(1)
-var<storage, read_write> particles: array<Particle>;
-
-var<push_constant> pc: PushConstants;
-
-@compute @workgroup_size(16, 16, 1)
-fn clear(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    if (global_id.x >= pc.window.x || global_id.y >= pc.window.y) {
-        return;
-    }
-    
-    let current = textureLoad(output_texture, vec2<i32>(global_id.xy));
-    
-    let fade_speed = 0.95; 
-    let faded = vec4<f32>(current.rgb * fade_speed, current.a);
-    
-    textureStore(output_texture, vec2<i32>(global_id.xy), faded);
-}
-
-
-@compute @workgroup_size(256, 1, 1)
-fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
-    var particle = particles[global_id.x];
-    
-    particle.position += particle.velocity * pc.delta_time;
-    
-    // Bounce off screen edges
-    if (particle.position.x <= 0.0 || particle.position.x >= f32(pc.window.x)) {
-        particle.velocity.x = -particle.velocity.x;
-    }
-    if (particle.position.y <= 0.0 || particle.position.y >= f32(pc.window.y)) {
-        particle.velocity.y = -particle.velocity.y;
-    }
-    
-    let mouse_pos = pc.mouse;
-    let to_mouse = mouse_pos - particle.position;
-    let dist = length(to_mouse);
-    
-    let min_dist = -0.5;
-    if (dist > min_dist) {
-        let force = normalize(to_mouse) * 800.0 / (dist);
-        particle.velocity += force * pc.delta_time;
-    } else {
-        let repel = normalize(-to_mouse) * 400.0;
-        particle.velocity += repel * pc.delta_time;
-    }
-    
-    particle.velocity *= 0.995;
-    
-    let max_speed = 400.0;
-    let current_speed = length(particle.velocity);
-    if (current_speed > max_speed) {
-        particle.velocity = normalize(particle.velocity) * max_speed;
-    }
-    
-    particles[global_id.x] = particle;
-    
-    let pos = vec2<i32>(particle.position);
-    if (pos.x >= 0 && pos.x < i32(pc.window.x) && 
-        pos.y >= 0 && pos.y < i32(pc.window.y)) {
-        let current = textureLoad(output_texture, pos);
-        let blended = max(current, particle.color);  // Additive blending
-        textureStore(output_texture, pos, blended);
-    }
-}
-"#;
-
-const PRSENT_SHADER: &str = r#"
-struct VertexOutput {
-    @builtin(position) pos: vec4<f32>,
-    @location(0) uv: vec2<f32>,
-}
-
-@group(0) @binding(2)
-var tex: texture_2d<f32>;
-@group(0) @binding(3)
-var tex_sampler: sampler;
-
-@vertex
-fn vmain(@builtin(vertex_index) vert_idx: u32) -> VertexOutput {
-    var positions = array<vec2<f32>, 6>(
-        vec2<f32>(-1.0, -1.0),  // bottom-left
-        vec2<f32>(-1.0,  1.0),  // top-left
-        vec2<f32>( 1.0, -1.0),  // bottom-right
-        
-        vec2<f32>(-1.0,  1.0),  // top-left
-        vec2<f32>( 1.0,  1.0),  // top-right
-        vec2<f32>( 1.0, -1.0)   // bottom-right
-    );
-    
-    var uvs = array<vec2<f32>, 6>(
-        vec2<f32>(0.0, 1.0),  // bottom-left
-        vec2<f32>(0.0, 0.0),  // top-left
-        vec2<f32>(1.0, 1.0),  // bottom-right
-        
-        vec2<f32>(0.0, 0.0),  // top-left
-        vec2<f32>(1.0, 0.0),  // top-right
-        vec2<f32>(1.0, 1.0)   // bottom-right
-    );
-
-    var output: VertexOutput;
-    output.pos = vec4<f32>(positions[vert_idx], 0.0, 1.0);
-    output.uv = uvs[vert_idx];
-    return output;
-}
-
-@fragment
-fn fmain(@location(0) uv: vec2<f32>) -> @location(0) vec4<f32> {
-    return textureSample(tex, tex_sampler, uv);
-}
-"#;
-
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct PushConstants {
@@ -258,7 +130,9 @@ impl Render {
                 | tgpu::BufferUsage::MAP_WRITE
                 | tgpu::BufferUsage::DEVICE
                 | tgpu::BufferUsage::COHERENT
-                | tgpu::BufferUsage::HOST_VISIBLE,
+                | tgpu::BufferUsage::HOST_VISIBLE
+                | tgpu::BufferUsage::MAP_READ
+                | tgpu::BufferUsage::MAP_WRITE,
         })?;
 
         particle_buffer.write(bytemuck::cast_slice(&particles), 0);
@@ -365,16 +239,15 @@ impl Render {
             },
         ]);
 
-        let present_shader = device
-            .create_shader(None, &tgpu::ShaderSource::Wgsl(PRSENT_SHADER))
-            .expect("Present Shader");
-        let compute_shader = device
-            .create_shader(None, &tgpu::ShaderSource::Wgsl(COMPUTE_SHADER))
+        const SHADER: &str = include_str!("./shader.slang");
+
+        let shader = device
+            .create_shader(None, tgpu::ShaderSource::Slang(SHADER.as_bytes()))
             .expect("Compute Shader");
 
         let compute_pipeline = device.create_compute_pipeline(&tgpu::ComputePipelineInfo {
             label: Some(tgpu::Label::Name("Compute Pipeline")),
-            shader: compute_shader.entry("main"),
+            shader: shader.entry("computeMain"),
             push_constant_size: Some(std::mem::size_of::<PushConstants>() as u32),
             descriptor_layouts: &[&layout],
             cache: None,
@@ -382,7 +255,7 @@ impl Render {
 
         let clear_pipeline = device.create_compute_pipeline(&tgpu::ComputePipelineInfo {
             label: Some(tgpu::Label::Name("Clear Pipeline")),
-            shader: compute_shader.entry("clear"),
+            shader: shader.entry("computeClear"),
             descriptor_layouts: &[&layout],
             push_constant_size: Some(std::mem::size_of::<PushConstants>() as u32),
             cache: None,
@@ -390,8 +263,8 @@ impl Render {
 
         let present_pipeline = device.create_render_pipeline(&tgpu::RenderPipelineInfo {
             label: Some(tgpu::Label::Name("Present Pipeline")),
-            vertex_shader: present_shader.entry("vmain"),
-            fragment_shader: present_shader.entry("fmain"),
+            vertex_shader: shader.entry("vertexMain"),
+            fragment_shader: shader.entry("fragmentMain"),
             color_formats: &[swapchain.format()],
             depth_format: None,
             descriptor_layouts: &[&layout],

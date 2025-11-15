@@ -1,12 +1,12 @@
-use std::sync::Arc;
+use std::{fs, path::Path, process::Command, sync::Arc};
 
 use ash::vk;
 
 use crate::{Device, Label, raw::RawDevice};
 
 pub enum ShaderSource<'a> {
-    Slang(&'a u8),
-    Glsl(&'a u8),
+    Slang(&'a [u8]),
+    Glsl(&'a [u8]),
     Wgsl(&'a str),
     SpirV(&'a [u32]),
 }
@@ -49,10 +49,13 @@ impl Device {
     pub fn create_shader<'a>(
         &self,
         label: Option<Label<'a>>,
-        source: &ShaderSource<'a>,
+        source: ShaderSource<'a>,
     ) -> Result<Shader, String> {
         match source {
-            ShaderSource::Slang(_code) => unimplemented!(),
+            ShaderSource::Slang(code) => {
+                let spirv = compile_slang_from_bytes(code)?;
+                Ok(self.create_shader_from_spirv(label, &spirv))
+            }
             ShaderSource::Glsl(_code) => unimplemented!(),
             ShaderSource::Wgsl(code) => {
                 let wgsl_shader = WgslShader::new(code)?;
@@ -75,10 +78,6 @@ impl Device {
         };
         Shader { module }
     }
-
-    // fn compile_glsl_shader<'a>(&self, code: &[u8]) -> Result<Arc<u32>, String> {
-    //
-    // }
 }
 
 pub struct WgslShader {
@@ -129,6 +128,102 @@ impl WgslShader {
 
         Ok(compiled)
     }
+}
+
+/// File-based API: compile `<input>.slang` to `<output>.spv` using `slangc`.
+///
+/// Equivalent to:
+/// slangc <input>.slang \
+///     -target spirv \
+///     -profile spirv_1_4 \
+///     -fvk-use-entrypoint-name \
+///     -emit-spirv-directly \
+///     -o <output>.spv
+pub fn compile_slang_to_spirv<I, O>(input: I, output: O) -> Result<(), String>
+where
+    I: AsRef<Path>,
+    O: AsRef<Path>,
+{
+    let input_path = input.as_ref();
+    let output_path = output.as_ref();
+
+    if !input_path.exists() {
+        return Err(format!(
+            "Input file does not exist: {}",
+            input_path.display()
+        ));
+    }
+
+    if let Some(parent) = output_path.parent().filter(|p| !p.as_os_str().is_empty()) {
+        fs::create_dir_all(parent).map_err(|e| {
+            format!(
+                "Failed to create output directory {}: {e}",
+                parent.display()
+            )
+        })?;
+    }
+
+    let output = Command::new("slangc")
+        .arg(input_path)
+        .arg("-target")
+        .arg("spirv")
+        .arg("-profile")
+        .arg("spirv_1_4")
+        .arg("-fvk-use-entrypoint-name")
+        .arg("-emit-spirv-directly")
+        .arg("-o")
+        .arg(output_path)
+        .output()
+        .map_err(|e| format!("Failed to execute `slangc`: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!(
+            "`slangc` failed with exit code {:?}:\n{}",
+            output.status.code(),
+            stderr
+        ));
+    }
+
+    Ok(())
+}
+
+pub fn compile_slang_from_bytes(source: &[u8]) -> Result<Arc<[u32]>, String> {
+    let dir =
+        tempfile::tempdir().map_err(|e| format!("Failed to create temporary directory: {e}"))?;
+
+    let input_path = dir.path().join("input.slang");
+    let output_path = dir.path().join("output.spv");
+
+    fs::write(&input_path, source).map_err(|e| {
+        format!(
+            "Failed to write temp input file {}: {e}",
+            input_path.display()
+        )
+    })?;
+
+    compile_slang_to_spirv(&input_path, &output_path)?;
+
+    let spv_bytes = fs::read(&output_path).map_err(|e| {
+        format!(
+            "Failed to read SPIR-V output {}: {e}",
+            output_path.display()
+        )
+    })?;
+
+    if spv_bytes.len() % 4 != 0 {
+        return Err(format!(
+            "SPIR-V output length ({}) is not 4-byte aligned",
+            spv_bytes.len()
+        ));
+    }
+
+    let words: Vec<u32> = {
+        let u32_slice: &[u32] = bytemuck::cast_slice(&spv_bytes);
+        u32_slice.to_vec()
+    };
+
+    Ok(Arc::from(words.into_boxed_slice()))
 }
 
 impl Drop for ShaderModule {
