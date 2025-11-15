@@ -160,6 +160,10 @@ impl Buffer {
     }
 
     pub fn write(&self, data: &[u8], offset: usize) {
+        debug_assert!(
+            self.inner.usage.contains(BufferUsage::MAP_READ),
+            "Writing requires MAP_WRITE"
+        );
         let size = data.len();
         unsafe {
             let mapping = self.map(offset);
@@ -171,6 +175,10 @@ impl Buffer {
     }
 
     pub fn read(&self, buffer: &mut [u8], offset: usize, size: usize) {
+        debug_assert!(
+            self.inner.usage.contains(BufferUsage::MAP_READ),
+            "Reading requires MAP_READ"
+        );
         unsafe {
             let mapping = self.map(offset);
             std::ptr::copy_nonoverlapping(mapping, buffer.as_mut_ptr(), size);

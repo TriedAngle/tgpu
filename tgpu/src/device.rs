@@ -9,7 +9,8 @@ use ash::vk;
 use parking_lot::Mutex;
 
 use crate::{
-    Adapter, CommandPools, GPUError, Instance, Queue, QueueFamilyInfo, QueueRequest, Semaphore,
+    Adapter, CommandPools, GPUError, Instance, Label, Queue, QueueFamilyInfo, QueueRequest,
+    Semaphore,
     raw::{QueueImpl, RawAdapter, RawInstance, SemaphoreImpl},
 };
 
@@ -229,6 +230,19 @@ impl DeviceImpl {
         unsafe {
             let _ = self.handle.wait_semaphores(&info, timeout_ns);
         }
+    }
+
+    pub unsafe fn create_shader_module_from_spirv<'a>(
+        &self,
+        label: Option<Label<'a>>,
+        spirv: &'a [u32],
+    ) -> vk::ShaderModule {
+        let info = vk::ShaderModuleCreateInfo::default().code(spirv);
+        let module = unsafe { self.handle.create_shader_module(&info, None).unwrap() };
+        if let Some(label) = &label {
+            unsafe { self.attach_label(module, label) };
+        }
+        module
     }
 }
 

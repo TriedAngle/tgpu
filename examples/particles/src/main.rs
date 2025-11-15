@@ -365,9 +365,11 @@ impl Render {
             },
         ]);
 
-        let present_shader = device.create_shader(PRSENT_SHADER).expect("Present Shader");
+        let present_shader = device
+            .create_shader(None, &tgpu::ShaderSource::Wgsl(PRSENT_SHADER))
+            .expect("Present Shader");
         let compute_shader = device
-            .create_shader(COMPUTE_SHADER)
+            .create_shader(None, &tgpu::ShaderSource::Wgsl(COMPUTE_SHADER))
             .expect("Compute Shader");
 
         let compute_pipeline = device.create_compute_pipeline(&tgpu::ComputePipelineInfo {

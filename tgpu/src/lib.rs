@@ -57,7 +57,7 @@ pub use image::{
 pub use instance::{Instance, InstanceCreateInfo};
 pub use pipeline::{ComputePipeline, ComputePipelineInfo, RenderPipeline, RenderPipelineInfo};
 pub use queue::{Queue, QueueFamilyInfo, QueueRequest};
-pub use shader::{Shader, ShaderFunction};
+pub use shader::{Shader, ShaderEntry, ShaderSource};
 pub use swapchain::{Frame, Swapchain, SwapchainCreateInfo};
 pub use sync::Semaphore;
 

@@ -1,10 +1,10 @@
 use ash::vk;
 use std::sync::Arc;
 
-use crate::{DescriptorSetLayout, Device, Label, ShaderFunction, raw::DeviceImpl};
+use crate::{DescriptorSetLayout, Device, Label, ShaderEntry, raw::DeviceImpl};
 
 pub struct ComputePipelineInfo<'a> {
-    pub shader: ShaderFunction<'a>,
+    pub shader: ShaderEntry<'a>,
     pub descriptor_layouts: &'a [&'a DescriptorSetLayout],
     pub push_constant_size: Option<u32>,
     pub cache: Option<vk::PipelineCache>,
@@ -14,7 +14,7 @@ pub struct ComputePipelineInfo<'a> {
 impl Default for ComputePipelineInfo<'_> {
     fn default() -> Self {
         Self {
-            shader: ShaderFunction::null(),
+            shader: ShaderEntry::null(),
             descriptor_layouts: &[],
             push_constant_size: None,
             cache: None,
@@ -24,8 +24,8 @@ impl Default for ComputePipelineInfo<'_> {
 }
 
 pub struct RenderPipelineInfo<'a> {
-    pub vertex_shader: ShaderFunction<'a>,
-    pub fragment_shader: ShaderFunction<'a>,
+    pub vertex_shader: ShaderEntry<'a>,
+    pub fragment_shader: ShaderEntry<'a>,
     pub color_formats: &'a [vk::Format],
     pub depth_format: Option<vk::Format>,
     pub descriptor_layouts: &'a [&'a DescriptorSetLayout],
@@ -42,8 +42,8 @@ pub struct RenderPipelineInfo<'a> {
 impl Default for RenderPipelineInfo<'_> {
     fn default() -> Self {
         Self {
-            vertex_shader: ShaderFunction::null(),
-            fragment_shader: ShaderFunction::null(),
+            vertex_shader: ShaderEntry::null(),
+            fragment_shader: ShaderEntry::null(),
             color_formats: &[],
             depth_format: None,
             descriptor_layouts: &[],
@@ -66,8 +66,7 @@ pub struct ComputePipeline {
 pub struct ComputePipelineImpl {
     pub handle: vk::Pipeline,
     pub layout: vk::PipelineLayout,
-    pub shader: vk::ShaderModule,
-    device: Arc<DeviceImpl>,
+    pub device: Arc<DeviceImpl>,
 }
 
 pub struct RenderPipeline {
@@ -77,16 +76,11 @@ pub struct RenderPipeline {
 pub struct RenderPipelineImpl {
     pub handle: vk::Pipeline,
     pub layout: vk::PipelineLayout,
-    pub vertex_shader: vk::ShaderModule,
-    pub fragment_shader: vk::ShaderModule,
     pub device: Arc<DeviceImpl>,
 }
 
 impl RenderPipelineImpl {
     pub fn new(device: Arc<DeviceImpl>, info: &RenderPipelineInfo) -> RenderPipelineImpl {
-        let vertex_shader = device.create_shader_module(info.vertex_shader).unwrap();
-        let fragment_shader = device.create_shader_module(info.fragment_shader).unwrap();
-
         let mut push_constant_ranges = Vec::new();
         if let Some(size) = info.push_constant_size {
             push_constant_ranges.push(
@@ -113,17 +107,17 @@ impl RenderPipelineImpl {
                 .unwrap()
         };
 
-        let vertex_stage_name = std::ffi::CString::new(info.vertex_shader.entry_point).unwrap();
-        let fragment_stage_name = std::ffi::CString::new(info.fragment_shader.entry_point).unwrap();
+        let vertex_stage_name = std::ffi::CString::new(info.vertex_shader.name).unwrap();
+        let fragment_stage_name = std::ffi::CString::new(info.fragment_shader.name).unwrap();
 
         let stages = [
             vk::PipelineShaderStageCreateInfo::default()
                 .stage(vk::ShaderStageFlags::VERTEX)
-                .module(vertex_shader)
+                .module(info.vertex_shader.shader.module.handle)
                 .name(&vertex_stage_name),
             vk::PipelineShaderStageCreateInfo::default()
                 .stage(vk::ShaderStageFlags::FRAGMENT)
-                .module(fragment_shader)
+                .module(info.fragment_shader.shader.module.handle)
                 .name(&fragment_stage_name),
         ];
 
@@ -208,8 +202,6 @@ impl RenderPipelineImpl {
         RenderPipelineImpl {
             handle,
             layout,
-            vertex_shader,
-            fragment_shader,
             device,
         }
     }
@@ -217,7 +209,6 @@ impl RenderPipelineImpl {
 
 impl ComputePipelineImpl {
     pub fn new(device: Arc<DeviceImpl>, info: &ComputePipelineInfo<'_>) -> ComputePipelineImpl {
-        let module = device.create_shader_module(info.shader).unwrap();
         let mut push_constant_ranges = Vec::new();
         if let Some(size) = info.push_constant_size {
             push_constant_ranges.push(
@@ -244,10 +235,10 @@ impl ComputePipelineImpl {
                 .unwrap()
         };
 
-        let stage_name = std::ffi::CString::new(info.shader.entry_point).unwrap();
+        let stage_name = std::ffi::CString::new(info.shader.name).unwrap();
         let stage = vk::PipelineShaderStageCreateInfo::default()
             .stage(vk::ShaderStageFlags::COMPUTE)
-            .module(module)
+            .module(info.shader.shader.module.handle)
             .name(&stage_name);
 
         let create_info = vk::ComputePipelineCreateInfo::default()
@@ -269,7 +260,6 @@ impl ComputePipelineImpl {
         ComputePipelineImpl {
             handle,
             layout,
-            shader: module,
             device,
         }
     }
@@ -291,7 +281,6 @@ impl Drop for ComputePipelineImpl {
     fn drop(&mut self) {
         unsafe {
             self.device.handle.destroy_pipeline(self.handle, None);
-            self.device.handle.destroy_shader_module(self.shader, None);
             self.device
                 .handle
                 .destroy_pipeline_layout(self.layout, None);
@@ -306,12 +295,6 @@ impl Drop for RenderPipelineImpl {
             self.device
                 .handle
                 .destroy_pipeline_layout(self.layout, None);
-            self.device
-                .handle
-                .destroy_shader_module(self.vertex_shader, None);
-            self.device
-                .handle
-                .destroy_shader_module(self.fragment_shader, None);
         }
     }
 }

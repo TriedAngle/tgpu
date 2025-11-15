@@ -9,6 +9,38 @@ use winit::{
     window::Window,
 };
 
+const TRIANGLE_SHADER: &str = r#"
+const positions = array<vec2f, 3>(
+  vec2f(0.0, -0.5),
+  vec2f(0.5, 0.5),
+  vec2f(-0.5, 0.5)
+);
+
+const colors = array<vec3f, 3>(
+  vec3f(1.0, 0.0, 0.0),
+  vec3f(0.0, 1.0, 0.0),
+  vec3f(0.0, 0.0, 1.0)
+);
+
+struct VertexOutput {
+  @builtin(position) position: vec4f,
+  @location(0) fragColor: vec3f,
+};
+
+@vertex
+fn vmain(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
+  var output: VertexOutput;
+  output.position = vec4f(positions[vertex_index], 0.0, 1.0);
+  output.fragColor = colors[vertex_index];
+  return output;
+}
+
+@fragment
+fn fmain(input: VertexOutput) -> @location(0) vec4f {
+  return vec4f(input.fragColor, 1.0);
+}
+"#;
+
 #[allow(unused)]
 pub struct Render {
     window: Window,
@@ -74,37 +106,8 @@ impl Render {
 
         let shader = device
             .create_shader(
-                r#"
-const positions = array<vec2f, 3>(
-  vec2f(0.0, -0.5),
-  vec2f(0.5, 0.5),
-  vec2f(-0.5, 0.5)
-);
-
-const colors = array<vec3f, 3>(
-  vec3f(1.0, 0.0, 0.0),
-  vec3f(0.0, 1.0, 0.0),
-  vec3f(0.0, 0.0, 1.0)
-);
-
-struct VertexOutput {
-  @builtin(position) position: vec4f,
-  @location(0) fragColor: vec3f,
-};
-
-@vertex
-fn vmain(@builtin(vertex_index) vertex_index: u32) -> VertexOutput {
-  var output: VertexOutput;
-  output.position = vec4f(positions[vertex_index], 0.0, 1.0);
-  output.fragColor = colors[vertex_index];
-  return output;
-}
-
-@fragment
-fn fmain(input: VertexOutput) -> @location(0) vec4f {
-  return vec4f(input.fragColor, 1.0);
-}
-        "#,
+                Some(tgpu::Label::Name("shader")),
+                &tgpu::ShaderSource::Wgsl(TRIANGLE_SHADER),
             )
             .expect("Shader");
 

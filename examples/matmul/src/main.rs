@@ -134,7 +134,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         | tgpu::BufferUsage::COPY_SRC
         | tgpu::BufferUsage::DEVICE
         | tgpu::BufferUsage::COHERENT
-        | tgpu::BufferUsage::HOST_VISIBLE;
+        | tgpu::BufferUsage::HOST_VISIBLE
+        | tgpu::BufferUsage::MAP_WRITE
+        | tgpu::BufferUsage::MAP_READ;
 
     let buf_a = device.create_buffer(&tgpu::BufferInfo {
         label: Some(tgpu::Label::Name("A")),
@@ -209,7 +211,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
     ]);
 
-    let shader = device.create_shader(MATMUL_WGSL).expect("MatMul WGSL");
+    let shader = device
+        .create_shader(None, &tgpu::ShaderSource::Wgsl(MATMUL_WGSL))
+        .expect("MatMul WGSL");
     let pipeline = device.create_compute_pipeline(&tgpu::ComputePipelineInfo {
         label: Some(tgpu::Label::Name("MatMul Pipeline")),
         shader: shader.entry("main"),
