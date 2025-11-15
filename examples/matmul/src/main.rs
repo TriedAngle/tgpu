@@ -33,6 +33,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         *x = rng.random_range(-1.0..1.0);
     }
 
+    // transposing for row major
+    let mut host_b_t = vec![0.0f32; len_b];
+    for row in 0..(k as usize) {
+        for col in 0..(n as usize) {
+            host_b_t[col * (k as usize) + row] = host_b[row * (n as usize) + col];
+        }
+    }
+
     let instance = tgpu::Instance::new(&tgpu::InstanceCreateInfo {
         app_name: "Headless MatMul",
         engine_name: "Example Engine",
@@ -77,7 +85,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     })?;
 
     buf_a.write(bytemuck::cast_slice(&host_a), 0);
-    buf_b.write(bytemuck::cast_slice(&host_b), 0);
+    buf_b.write(bytemuck::cast_slice(&host_b_t), 0);
 
     let dsl = device.create_descriptor_set_layout(&tgpu::DescriptorSetLayoutInfo {
         label: Some(tgpu::Label::Name("MatMul DSL")),
