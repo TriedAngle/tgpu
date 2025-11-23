@@ -57,7 +57,6 @@ void main(
 
     float acc = 0.0f;
 
-    // Loop over K dimension in tiles of 16 floats (4 float4s).
     for (uint tileIndex = 0; tileIndex < numTiles; ++tileIndex) {
         uint k4Base = tileIndex * TILE_K4;
 

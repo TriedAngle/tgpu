@@ -18,6 +18,8 @@ mod queue;
 mod shader;
 mod swapchain;
 mod sync;
+mod descriptor2;
+mod freelist;
 
 pub mod raw {
     pub use crate::adapter::{AdapterImpl, RawAdapter};
