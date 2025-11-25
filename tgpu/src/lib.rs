@@ -10,7 +10,9 @@ mod buffer;
 mod command;
 mod debug;
 mod descriptor;
+mod descriptor2;
 mod device;
+mod freelist;
 mod image;
 mod instance;
 mod pipeline;
@@ -18,8 +20,6 @@ mod queue;
 mod shader;
 mod swapchain;
 mod sync;
-mod descriptor2;
-mod freelist;
 
 pub mod raw {
     pub use crate::adapter::{AdapterImpl, RawAdapter};

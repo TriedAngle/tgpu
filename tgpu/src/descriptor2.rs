@@ -1,25 +1,58 @@
-use std::{collections::HashMap, marker::PhantomData, sync::Arc};
+use std::{collections::HashMap, sync::Arc};
 
 use ash::vk;
 
-use crate::{Buffer, freelist::FreeList, raw::RawDevice};
+use crate::{freelist::FreeList, raw::RawDevice};
 
-pub struct DescriptorHandle {
+pub struct DescriptorHandleRaw {
     index: u32,
-    ty: i32,
+    ty: DescriptorType,
 }
 
 pub struct BindlessPool {
     pub inner: Arc<BindlessPoolImpl>,
 }
 
+// TODO: we should probably use a normal "pool" abstraction and just implement bindless pool on top
+// of that.
 pub struct BindlessPoolImpl {
     pub device: RawDevice,
     pub handle: vk::DescriptorPool,
-    pub layout: vk::DescriptorSetLayout,
+    pub layout: Layout,
     pub set: vk::DescriptorSet,
 
-    pub allocations: HashMap<vk::DescriptorType, FreeList<()>>,
+    pub allocations: HashMap<DescriptorType, FreeList<()>>,
+}
+
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+pub enum DescriptorType {
+    Sampler,
+    CombinedImageSampler,
+    SampledImage,
+    StorageImage,
+    UniformTexelBuffer,
+    StorageTexelBuffer,
+    UniformBuffer,
+    StorageBuffer,
+    UniformDynamicBuffer,
+    StorageDynamicBuffer,
+    InputAttachment,
+    Raw(i32),
+}
+
+#[derive(Debug, Copy, Clone)]
+pub struct DescriptorBinding {
+    pub binding: u32,
+    pub ty: DescriptorType,
+    pub count: u32,
+    pub stages: vk::ShaderStageFlags,
+    pub flags: Option<vk::DescriptorBindingFlags>,
+}
+
+pub struct Layout {
+    pub handle: vk::DescriptorSetLayout,
+    pub bindings: Vec<DescriptorBinding>,
+    pub device: RawDevice,
 }
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -129,8 +162,26 @@ impl BindlessPoolImpl {
 
         binding_types_count.iter().for_each(|&(ty, _count)| {
             let freelist = FreeList::new();
-            allocations.insert(ty, freelist);
+            allocations.insert(ty.into(), freelist);
         });
+
+        let layout_bindings = bindings
+            .iter()
+            .zip(&binding_flags)
+            .map(|(binding, flags)| DescriptorBinding {
+                binding: binding.binding,
+                ty: binding.descriptor_type.into(),
+                count: binding.descriptor_count,
+                stages: binding.stage_flags,
+                flags: Some(*flags),
+            })
+            .collect();
+
+        let layout = Layout {
+            handle: layout,
+            bindings: layout_bindings,
+            device: device.clone(),
+        };
 
         Self {
             device,
@@ -141,22 +192,61 @@ impl BindlessPoolImpl {
         }
     }
 
-    // pub fn layout(&self) -> 
+    pub fn layout<'a>(&'a self) -> &'a Layout {
+        &self.layout
+    }
 
-    pub fn allocate(&self, ty: vk::DescriptorType) -> DescriptorHandle {
+    pub fn allocate(&self, ty: DescriptorType) -> DescriptorHandleRaw {
         let list = self.allocations.get(&ty).expect("allocations");
         let index = list.insert(());
-        let handle = DescriptorHandle {
-            ty: ty.as_raw() as i32,
+        let handle = DescriptorHandleRaw {
+            ty: ty,
             index: index as u32,
         };
         handle
     }
 
-    pub fn free(&self, handle: DescriptorHandle) {
-        let ty = vk::DescriptorType::from_raw(handle.ty);
+    pub fn free(&self, handle: DescriptorHandleRaw) {
+        let ty = handle.ty;
         let index = handle.index as usize;
         let list = self.allocations.get(&ty).expect("allocations");
         let _data = list.remove(index);
+    }
+}
+impl From<DescriptorType> for vk::DescriptorType {
+    fn from(value: DescriptorType) -> Self {
+        match value {
+            DescriptorType::Sampler => vk::DescriptorType::SAMPLER,
+            DescriptorType::CombinedImageSampler => vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+            DescriptorType::SampledImage => vk::DescriptorType::SAMPLED_IMAGE,
+            DescriptorType::StorageImage => vk::DescriptorType::STORAGE_IMAGE,
+            DescriptorType::UniformTexelBuffer => vk::DescriptorType::UNIFORM_TEXEL_BUFFER,
+            DescriptorType::StorageTexelBuffer => vk::DescriptorType::STORAGE_TEXEL_BUFFER,
+            DescriptorType::UniformBuffer => vk::DescriptorType::UNIFORM_BUFFER,
+            DescriptorType::StorageBuffer => vk::DescriptorType::STORAGE_BUFFER,
+            DescriptorType::UniformDynamicBuffer => vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC,
+            DescriptorType::StorageDynamicBuffer => vk::DescriptorType::STORAGE_BUFFER_DYNAMIC,
+            DescriptorType::InputAttachment => vk::DescriptorType::INPUT_ATTACHMENT,
+            DescriptorType::Raw(raw) => vk::DescriptorType::from_raw(raw),
+        }
+    }
+}
+
+impl From<vk::DescriptorType> for DescriptorType {
+    fn from(value: vk::DescriptorType) -> Self {
+        match value {
+            vk::DescriptorType::SAMPLER => DescriptorType::Sampler,
+            vk::DescriptorType::COMBINED_IMAGE_SAMPLER => DescriptorType::CombinedImageSampler,
+            vk::DescriptorType::SAMPLED_IMAGE => DescriptorType::SampledImage,
+            vk::DescriptorType::STORAGE_IMAGE => DescriptorType::StorageImage,
+            vk::DescriptorType::UNIFORM_TEXEL_BUFFER => DescriptorType::UniformTexelBuffer,
+            vk::DescriptorType::STORAGE_TEXEL_BUFFER => DescriptorType::StorageTexelBuffer,
+            vk::DescriptorType::UNIFORM_BUFFER => DescriptorType::UniformBuffer,
+            vk::DescriptorType::STORAGE_BUFFER => DescriptorType::StorageBuffer,
+            vk::DescriptorType::UNIFORM_BUFFER_DYNAMIC => DescriptorType::UniformDynamicBuffer,
+            vk::DescriptorType::STORAGE_BUFFER_DYNAMIC => DescriptorType::StorageDynamicBuffer,
+            vk::DescriptorType::INPUT_ATTACHMENT => DescriptorType::InputAttachment,
+            other => DescriptorType::Raw(other.as_raw()),
+        }
     }
 }
