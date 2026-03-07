@@ -55,10 +55,15 @@ pub struct Render {
 
 impl Render {
     pub fn new(window: Window) -> Result<Render, tgpu::GPUError> {
-        let instance = tgpu::Instance::new(&tgpu::InstanceCreateInfo {
-            app_name: "Triangle",
-            engine_name: "Example Engine",
-        })?;
+        let display = window.display_handle().unwrap().as_raw();
+
+        let instance = tgpu::Instance::new_with_display(
+            &tgpu::InstanceCreateInfo {
+                app_name: "Triangle",
+                engine_name: "Example Engine",
+            },
+            display,
+        )?;
 
         let adapters = instance.adapters(&[])?.collect::<Vec<_>>();
         // println!("adapters: {:#?}", adapters);
@@ -78,6 +83,8 @@ impl Render {
 
         let queue = queues.next().unwrap();
 
+        let size = window.inner_size();
+
         // TODO: use this buffer
         let buffer = device.create_buffer(&tgpu::BufferInfo {
             label: Some(tgpu::Label::Name("test")),
@@ -90,6 +97,10 @@ impl Render {
         let swapchain = device.create_swapchain(&tgpu::SwapchainCreateInfo {
             display: window.display_handle().unwrap().as_raw(),
             window: window.window_handle().unwrap().as_raw(),
+            preferred_extent: vk::Extent2D {
+                width: size.width,
+                height: size.height,
+            },
             preferred_image_count: 3,
             preferred_present_mode: tgpu::PresentModeKHR::MAILBOX,
             format_selector: Box::new(|formats| {
@@ -142,6 +153,11 @@ impl Render {
         log::trace!("Start Frame {:?}", frame.index);
         if frame.suboptimal {
             log::debug!("recreate swapchain");
+            let size = self.window.inner_size();
+            self.swapchain.set_preferred_extent(vk::Extent2D {
+                width: size.width,
+                height: size.height,
+            });
             let _ = self.swapchain.recreate();
             return Ok(());
         }
@@ -233,6 +249,11 @@ impl Render {
         match self.swapchain.present(&self.queue, frame) {
             Ok(true) | Err(_) => {
                 log::debug!("recreate swapchain");
+                let size = self.window.inner_size();
+                self.swapchain.set_preferred_extent(vk::Extent2D {
+                    width: size.width,
+                    height: size.height,
+                });
                 let _ = self.swapchain.recreate();
                 return Ok(());
             }
@@ -297,5 +318,7 @@ fn main() {
 
     let event_loop = EventLoop::new().expect("acquire event loop");
     let mut app = App::default();
-    event_loop.run_app(&mut app).expect("run app");
+    if let Err(err) = event_loop.run_app(&mut app) {
+        eprintln!("run app failed: {err}");
+    }
 }

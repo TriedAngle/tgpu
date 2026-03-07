@@ -1,4 +1,5 @@
 use ash::vk;
+use raw_window_handle::RawDisplayHandle;
 use std::borrow::Cow;
 use std::ffi;
 use std::sync::Arc;
@@ -27,7 +28,29 @@ impl Instance {
         let app_name = ffi::CString::new(info.app_name).expect("Convert to cstring");
         let engine_name = ffi::CString::new(info.engine_name).expect("Convert to cstring");
 
-        let (extensions, flags) = Self::get_required_extensions_and_flags();
+        let (extensions, flags) = Self::get_required_extensions_and_flags(None)?;
+
+        let validation_layer = ffi::CString::new("VK_LAYER_KHRONOS_validation")
+            .expect("Create Validation Layer String");
+
+        let layers = vec![validation_layer.as_ptr()];
+
+        let instance =
+            unsafe { InstanceImpl::new(&app_name, &engine_name, &extensions, &layers, flags)? };
+
+        let instance = Arc::new(instance);
+
+        Ok(Self { inner: instance })
+    }
+
+    pub fn new_with_display(
+        info: &InstanceCreateInfo<'_>,
+        display: RawDisplayHandle,
+    ) -> Result<Self, GPUError> {
+        let app_name = ffi::CString::new(info.app_name).expect("Convert to cstring");
+        let engine_name = ffi::CString::new(info.engine_name).expect("Convert to cstring");
+
+        let (extensions, flags) = Self::get_required_extensions_and_flags(Some(display))?;
 
         let validation_layer = ffi::CString::new("VK_LAYER_KHRONOS_validation")
             .expect("Create Validation Layer String");
@@ -52,37 +75,64 @@ impl Instance {
         }))
     }
 
-    fn get_required_extensions_and_flags() -> (Vec<*const i8>, vk::InstanceCreateFlags) {
-        let mut extensions = vec![ash::khr::surface::NAME.as_ptr()];
-        let mut flags = vk::InstanceCreateFlags::empty();
+    fn get_required_extensions_and_flags(
+        display: Option<RawDisplayHandle>,
+    ) -> Result<(Vec<*const i8>, vk::InstanceCreateFlags), GPUError> {
+        let mut extensions = if let Some(display) = display {
+            ash_window::enumerate_required_extensions(display)?.to_vec()
+        } else {
+            vec![ash::khr::surface::NAME.as_ptr()]
+        };
+        let flags = vk::InstanceCreateFlags::empty();
+
+        #[cfg(target_os = "macos")]
+        let mut flags = flags;
 
         // TODO: make this toggable
-        extensions.push(ash::ext::debug_utils::NAME.as_ptr());
+        push_unique(&mut extensions, ash::ext::debug_utils::NAME.as_ptr());
 
         #[cfg(target_os = "windows")]
-        extensions.push(ash::khr::win32_surface::NAME.as_ptr());
+        {
+            push_unique(&mut extensions, ash::khr::win32_surface::NAME.as_ptr());
+        }
 
         #[cfg(all(unix, not(target_os = "android"), not(target_os = "macos")))]
-        extensions.push(ash::khr::xlib_surface::NAME.as_ptr());
+        {
+            push_unique(&mut extensions, ash::khr::xlib_surface::NAME.as_ptr());
+            push_unique(&mut extensions, ash::khr::wayland_surface::NAME.as_ptr());
+        }
 
         #[cfg(target_os = "macos")]
         {
-            extensions.push(ash::ext::metal_surface::NAME.as_ptr());
-            extensions.push(ash::khr::portability_enumeration::NAME.as_ptr());
+            push_unique(&mut extensions, ash::ext::metal_surface::NAME.as_ptr());
+            push_unique(
+                &mut extensions,
+                ash::khr::portability_enumeration::NAME.as_ptr(),
+            );
             flags |= vk::InstanceCreateFlags::ENUMERATE_PORTABILITY_KHR;
         }
 
         #[cfg(target_os = "android")]
-        extensions.push(ash::khr::android_surface::NAME.as_ptr());
+        {
+            push_unique(&mut extensions, ash::khr::android_surface::NAME.as_ptr());
+        }
 
         #[cfg(target_os = "ios")]
-        extensions.push(ash::mvk::ios_surface::NAME.as_ptr());
+        {
+            push_unique(&mut extensions, ash::mvk::ios_surface::NAME.as_ptr());
+        }
 
-        (extensions, flags)
+        Ok((extensions, flags))
     }
 
     pub fn raw(&self) -> RawInstance {
         self.inner.clone()
+    }
+}
+
+fn push_unique(extensions: &mut Vec<*const i8>, extension: *const i8) {
+    if !extensions.contains(&extension) {
+        extensions.push(extension);
     }
 }
 

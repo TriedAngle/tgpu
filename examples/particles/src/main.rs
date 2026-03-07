@@ -64,10 +64,15 @@ pub struct Render {
 
 impl Render {
     pub fn new(window: Window) -> Result<Render, tgpu::GPUError> {
-        let instance = tgpu::Instance::new(&tgpu::InstanceCreateInfo {
-            app_name: "Particles",
-            engine_name: "Example Engine",
-        })?;
+        let display = window.display_handle().unwrap().as_raw();
+
+        let instance = tgpu::Instance::new_with_display(
+            &tgpu::InstanceCreateInfo {
+                app_name: "Particles",
+                engine_name: "Example Engine",
+            },
+            display,
+        )?;
 
         let adapters = instance.adapters(&[])?.collect::<Vec<_>>();
         let adapter = adapters[0].clone();
@@ -85,9 +90,15 @@ impl Render {
 
         let queue = queues.next().unwrap();
 
+        let size = window.inner_size();
+
         let swapchain = device.create_swapchain(&tgpu::SwapchainCreateInfo {
             display: window.display_handle().unwrap().as_raw(),
             window: window.window_handle().unwrap().as_raw(),
+            preferred_extent: vk::Extent2D {
+                width: size.width,
+                height: size.height,
+            },
             preferred_image_count: 3,
             preferred_present_mode: tgpu::PresentModeKHR::MAILBOX,
             format_selector: Box::new(|formats| {
@@ -101,8 +112,6 @@ impl Render {
                     .unwrap_or(formats[0])
             }),
         })?;
-
-        let size = window.inner_size();
 
         let mut particles = vec![Particle::default(); PARTICLE_COUNT];
 
@@ -447,8 +456,12 @@ impl Render {
 
     fn handle_resize(&mut self) {
         log::debug!("recreate swapchain");
-        let _ = self.swapchain.recreate();
         let size = self.window.inner_size();
+        self.swapchain.set_preferred_extent(vk::Extent2D {
+            width: size.width,
+            height: size.height,
+        });
+        let _ = self.swapchain.recreate();
         self.pc.window = [size.width, size.height];
 
         let present_image = self

@@ -20,6 +20,7 @@ pub struct Swapchain {
 pub struct SwapchainCreateInfo {
     pub display: RawDisplayHandle,
     pub window: RawWindowHandle,
+    pub preferred_extent: vk::Extent2D,
     pub preferred_image_count: usize,
     pub preferred_present_mode: vk::PresentModeKHR,
     pub format_selector: Box<dyn Fn(&[vk::SurfaceFormatKHR]) -> vk::SurfaceFormatKHR>,
@@ -31,6 +32,7 @@ pub struct SwapchainImplResources {
     pub images: Vec<Image>,
     pub views: Vec<ImageView>,
     pub capabilities: vk::SurfaceCapabilitiesKHR,
+    pub extent: vk::Extent2D,
     pub present_mode: vk::PresentModeKHR,
     pub device: RawDevice,
 }
@@ -50,6 +52,7 @@ pub struct SwapchainImpl {
     pub resources: SwapchainImplResources,
 
     pub max_flight: usize,
+    pub preferred_extent: vk::Extent2D,
     pub formats: Arc<[vk::SurfaceFormatKHR]>,
     pub format: vk::SurfaceFormatKHR,
     pub present_modes: Arc<[vk::PresentModeKHR]>,
@@ -90,6 +93,7 @@ impl SwapchainImpl {
             surface,
             &surface_loader,
             adapter.handle,
+            info.preferred_extent,
             info.preferred_image_count as u32,
             info.preferred_present_mode,
             format,
@@ -111,6 +115,7 @@ impl SwapchainImpl {
             resources,
 
             max_flight: info.preferred_image_count,
+            preferred_extent: info.preferred_extent,
             formats: Arc::from(formats),
             format,
             present_modes: Arc::from(present_modes),
@@ -161,6 +166,7 @@ impl SwapchainImpl {
         surface_handle: vk::SurfaceKHR,
         surface_loader: &ash::khr::surface::Instance,
         adapter_handle: vk::PhysicalDevice,
+        preferred_extent: vk::Extent2D,
         preferred_image_count: u32,
         preferred_present_mode: vk::PresentModeKHR,
         format: vk::SurfaceFormatKHR,
@@ -173,15 +179,28 @@ impl SwapchainImpl {
         };
 
         let min_images = capabilities.min_image_count;
-        let max_images = if capabilities.max_image_count == 0 {
-            preferred_image_count as u32
+        let image_count = if capabilities.max_image_count == 0 {
+            preferred_image_count.max(min_images)
         } else {
-            capabilities.max_image_count
+            preferred_image_count
+                .max(min_images)
+                .min(capabilities.max_image_count)
         };
 
-        let image_count = (preferred_image_count as u32)
-            .max(min_images)
-            .min(max_images);
+        let extent = if capabilities.current_extent.width == u32::MAX {
+            vk::Extent2D {
+                width: preferred_extent
+                    .width
+                    .max(capabilities.min_image_extent.width)
+                    .min(capabilities.max_image_extent.width),
+                height: preferred_extent
+                    .height
+                    .max(capabilities.min_image_extent.height)
+                    .min(capabilities.max_image_extent.height),
+            }
+        } else {
+            capabilities.current_extent
+        };
 
         let present_modes = unsafe {
             surface_loader
@@ -213,7 +232,7 @@ impl SwapchainImpl {
             .min_image_count(image_count)
             .image_format(format.format)
             .image_color_space(format.color_space)
-            .image_extent(capabilities.current_extent)
+            .image_extent(extent)
             .image_array_layers(1)
             .image_usage(vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSFER_DST)
             .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
@@ -255,6 +274,7 @@ impl SwapchainImpl {
             images,
             views,
             capabilities,
+            extent,
             present_mode,
             device,
         };
@@ -342,7 +362,7 @@ impl SwapchainImpl {
                 Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
                     return Ok(Frame {
                         index: 0,
-                        suboptimal: false,
+                        suboptimal: true,
                     });
                 }
                 Err(e) => return Err(GPUError::Vulkan(e)),
@@ -385,15 +405,18 @@ impl SwapchainImpl {
     }
 
     pub fn available_semaphore(&self, frame: Frame) -> &Semaphore {
-        &self.available[frame.index as usize]
+        let _ = frame;
+        &self.available[self.frame]
     }
 
     pub fn finished_semaphore(&self, frame: Frame) -> &Semaphore {
-        &self.finished[frame.index as usize]
+        let _ = frame;
+        &self.finished[self.frame]
     }
 
     pub fn fence(&self, frame: Frame) -> vk::Fence {
-        self.flight[frame.index as usize]
+        let _ = frame;
+        self.flight[self.frame]
     }
 
     pub fn recreate(&mut self) -> Result<(), GPUError> {
@@ -404,6 +427,7 @@ impl SwapchainImpl {
             self.surface,
             &self.surface_loader,
             self.device.adapter.handle,
+            self.preferred_extent,
             self.resources.images.len() as u32,
             self.resources.present_mode,
             self.format,
@@ -411,7 +435,7 @@ impl SwapchainImpl {
         )?;
 
         let (available, finished, flight) =
-            Self::create_syncs(self.device.clone(), self.resources.images.len())?;
+            Self::create_syncs(self.device.clone(), new.images.len())?;
 
         unsafe {
             self.loader.destroy_swapchain(self.resources.handle, None);
@@ -424,12 +448,17 @@ impl SwapchainImpl {
         self.available = available;
         self.finished = finished;
         self.flight = flight;
+        self.max_flight = self.available.len();
         self.frame = 0;
         Ok(())
     }
 }
 
 impl Swapchain {
+    pub fn set_preferred_extent(&mut self, extent: vk::Extent2D) {
+        self.inner.preferred_extent = extent;
+    }
+
     #[inline]
     pub fn acquire_next(&mut self, timeout: Option<u64>) -> Result<Frame, GPUError> {
         self.inner.acquire_next(timeout)
@@ -462,7 +491,7 @@ impl Swapchain {
 
     #[inline]
     pub fn extent(&self) -> vk::Extent2D {
-        self.inner.resources.capabilities.current_extent
+        self.inner.resources.extent
     }
 }
 

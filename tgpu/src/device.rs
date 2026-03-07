@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     mem::ManuallyDrop,
-    sync::{Arc, atomic::AtomicU64},
+    sync::{atomic::AtomicU64, Arc},
     time::Duration,
 };
 
@@ -9,9 +9,9 @@ use ash::vk;
 use parking_lot::Mutex;
 
 use crate::{
+    raw::{QueueImpl, RawAdapter, RawInstance, SemaphoreImpl},
     Adapter, CommandPools, GPUError, Instance, Label, Queue, QueueFamilyInfo, QueueRequest,
     Semaphore,
-    raw::{QueueImpl, RawAdapter, RawInstance, SemaphoreImpl},
 };
 
 #[derive(Debug)]
@@ -80,14 +80,20 @@ impl DeviceImpl {
         let mut synchronization_two_features =
             vk::PhysicalDeviceSynchronization2Features::default().synchronization2(true);
 
+        let mut vulkan_1_1_features =
+            vk::PhysicalDeviceVulkan11Features::default().shader_draw_parameters(true);
+
         // TODO: once apple engineers actually use their own stuff
         // we can remove all of them except swapchain
-        let mut device_extensions = vec![
+        let device_extensions = vec![
             ash::khr::swapchain::NAME.as_ptr(),
             ash::khr::timeline_semaphore::NAME.as_ptr(),
             ash::khr::dynamic_rendering::NAME.as_ptr(),
             ash::khr::synchronization2::NAME.as_ptr(),
         ];
+
+        #[cfg(target_os = "macos")]
+        let mut device_extensions = device_extensions;
 
         #[cfg(target_os = "macos")]
         {
@@ -130,6 +136,7 @@ impl DeviceImpl {
             .push_next(&mut pdev_features2)
             .push_next(&mut timeline_semaphore_features)
             .push_next(&mut synchronization_two_features)
+            .push_next(&mut vulkan_1_1_features)
             .push_next(&mut descriptor_indexing_features);
 
         let handle = unsafe { instance.create_device_handle(&device_info, adapter.handle) };
