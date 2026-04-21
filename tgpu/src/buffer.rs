@@ -2,7 +2,19 @@ use ash::vk;
 use std::{cell::UnsafeCell, ptr, sync::Arc};
 use vkm::Alloc;
 
-use crate::{Device, GPUError, Label, raw::RawDevice};
+use crate::{Device, GPUError, HostAccess, Label, MemoryPreset, raw::RawDevice};
+
+bitflags::bitflags! {
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct BufferUses: u32 {
+        const COPY_SRC = 1 << 0;
+        const COPY_DST = 1 << 1;
+        const INDEX = 1 << 2;
+        const VERTEX = 1 << 3;
+        const UNIFORM = 1 << 4;
+        const STORAGE = 1 << 5;
+    }
+}
 
 bitflags::bitflags! {
     #[derive(Debug, Clone, Copy)]
@@ -93,12 +105,10 @@ impl From<BufferUsage> for vk::MemoryPropertyFlags {
 impl From<BufferUsage> for vkm::AllocationCreateFlags {
     fn from(usage: BufferUsage) -> Self {
         let mut flags = vkm::AllocationCreateFlags::empty();
-        if (usage.contains(BufferUsage::HOST_VISIBLE) || usage.contains(BufferUsage::HOST))
-            && usage.contains(BufferUsage::MAP_WRITE)
-        {
-            if usage.contains(BufferUsage::RANDOM_ACCESS) {
+        if usage.contains(BufferUsage::HOST_VISIBLE) || usage.contains(BufferUsage::HOST) {
+            if usage.contains(BufferUsage::RANDOM_ACCESS) || usage.contains(BufferUsage::MAP_READ) {
                 flags |= vkm::AllocationCreateFlags::HOST_ACCESS_RANDOM;
-            } else {
+            } else if usage.contains(BufferUsage::MAP_WRITE) {
                 flags |= vkm::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE;
             }
         }
@@ -109,6 +119,29 @@ impl From<BufferUsage> for vkm::AllocationCreateFlags {
 impl Default for BufferUsage {
     fn default() -> Self {
         Self::empty()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct BufferDesc<'a> {
+    pub size: usize,
+    pub usage: BufferUses,
+    pub memory: MemoryPreset,
+    pub host_access: HostAccess,
+    pub sharing: vk::SharingMode,
+    pub label: Option<Label<'a>>,
+}
+
+impl Default for BufferDesc<'_> {
+    fn default() -> Self {
+        Self {
+            size: 0,
+            usage: BufferUses::empty(),
+            memory: MemoryPreset::GpuOnly,
+            host_access: HostAccess::None,
+            sharing: vk::SharingMode::EXCLUSIVE,
+            label: None,
+        }
     }
 }
 
@@ -146,6 +179,77 @@ impl Device {
         };
         Ok(buffer)
     }
+
+    pub fn create_buffer_with(&self, desc: &BufferDesc<'_>) -> Result<Buffer, GPUError> {
+        if desc.size == 0 {
+            return Err(GPUError::Validation(
+                "buffer size must be greater than zero",
+            ));
+        }
+        if desc.usage.is_empty() {
+            return Err(GPUError::Validation("buffer usage must not be empty"));
+        }
+        if desc.memory == MemoryPreset::TransientAttachment {
+            return Err(GPUError::Validation(
+                "TransientAttachment memory is only valid for images",
+            ));
+        }
+
+        let host_access = match (desc.memory, desc.host_access) {
+            (MemoryPreset::Upload, HostAccess::None) => HostAccess::WriteSequential,
+            (MemoryPreset::Readback, HostAccess::None) => HostAccess::ReadRandom,
+            (MemoryPreset::Dynamic, HostAccess::None) => HostAccess::WriteSequential,
+            (_, host_access) => host_access,
+        };
+
+        if desc.memory == MemoryPreset::GpuOnly && host_access != HostAccess::None {
+            return Err(GPUError::Validation(
+                "GpuOnly buffers cannot request host access; use Upload, Readback, or Dynamic",
+            ));
+        }
+
+        let mut usage: BufferUsage = desc.usage.into();
+
+        match desc.memory {
+            MemoryPreset::GpuOnly => usage |= BufferUsage::DEVICE,
+            MemoryPreset::Upload => usage |= BufferUsage::HOST | BufferUsage::HOST_VISIBLE,
+            MemoryPreset::Readback => {
+                usage |= BufferUsage::HOST | BufferUsage::HOST_VISIBLE | BufferUsage::CACHED
+            }
+            MemoryPreset::Dynamic => usage |= BufferUsage::DEVICE | BufferUsage::HOST_VISIBLE,
+            MemoryPreset::TransientAttachment => unreachable!(),
+        }
+
+        match host_access {
+            HostAccess::None => {}
+            HostAccess::WriteSequential => usage |= BufferUsage::MAP_WRITE,
+            HostAccess::ReadRandom => usage |= BufferUsage::MAP_READ | BufferUsage::RANDOM_ACCESS,
+            HostAccess::ReadWriteRandom => {
+                usage |= BufferUsage::MAP_READ | BufferUsage::MAP_WRITE | BufferUsage::RANDOM_ACCESS
+            }
+        }
+
+        if desc.sharing == vk::SharingMode::CONCURRENT {
+            usage |= BufferUsage::SHARE;
+        }
+
+        let info = BufferInfo {
+            size: desc.size,
+            usage,
+            label: desc.label.clone(),
+        };
+        let inner = BufferImpl::new_with_allocation(
+            self.inner.clone(),
+            &info,
+            allocation_create_info(desc.memory, host_access),
+        )?;
+
+        Ok(Buffer {
+            inner: Arc::new(inner),
+            size: info.size,
+            usage: info.usage,
+        })
+    }
 }
 
 impl Buffer {
@@ -167,6 +271,7 @@ impl Buffer {
             let mapping = self.map(offset);
 
             ptr::copy(data.as_ptr(), mapping, size);
+            self.inner.flush(offset, size);
 
             self.unmap();
         }
@@ -179,14 +284,97 @@ impl Buffer {
         );
         unsafe {
             let mapping = self.map(offset);
+            self.inner.invalidate(offset, size);
             std::ptr::copy_nonoverlapping(mapping, buffer.as_mut_ptr(), size);
             self.unmap();
         }
+    }
+
+    pub fn write_slice<T: bytemuck::Pod>(&self, data: &[T]) {
+        self.write(bytemuck::cast_slice(data), 0);
+    }
+
+    pub fn read_slice<T: bytemuck::Pod>(&self, data: &mut [T]) {
+        let size = std::mem::size_of_val(data);
+        self.read(bytemuck::cast_slice_mut(data), 0, size);
+    }
+}
+
+impl From<BufferUses> for BufferUsage {
+    fn from(usage: BufferUses) -> Self {
+        let mut raw = BufferUsage::empty();
+        if usage.contains(BufferUses::COPY_SRC) {
+            raw |= BufferUsage::COPY_SRC;
+        }
+        if usage.contains(BufferUses::COPY_DST) {
+            raw |= BufferUsage::COPY_DST;
+        }
+        if usage.contains(BufferUses::INDEX) {
+            raw |= BufferUsage::INDEX;
+        }
+        if usage.contains(BufferUses::VERTEX) {
+            raw |= BufferUsage::VERTEX;
+        }
+        if usage.contains(BufferUses::UNIFORM) {
+            raw |= BufferUsage::UNIFORM;
+        }
+        if usage.contains(BufferUses::STORAGE) {
+            raw |= BufferUsage::STORAGE;
+        }
+        raw
+    }
+}
+
+fn allocation_create_info(
+    memory: MemoryPreset,
+    host_access: HostAccess,
+) -> vkm::AllocationCreateInfo {
+    let usage = match memory {
+        MemoryPreset::GpuOnly => vkm::MemoryUsage::AutoPreferDevice,
+        MemoryPreset::Upload | MemoryPreset::Readback => vkm::MemoryUsage::AutoPreferHost,
+        MemoryPreset::Dynamic => vkm::MemoryUsage::AutoPreferDevice,
+        MemoryPreset::TransientAttachment => vkm::MemoryUsage::GpuLazy,
+    };
+
+    let mut flags = vkm::AllocationCreateFlags::empty();
+    let mut preferred_flags = vk::MemoryPropertyFlags::empty();
+
+    match host_access {
+        HostAccess::None => {}
+        HostAccess::WriteSequential => {
+            flags |= vkm::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE;
+        }
+        HostAccess::ReadRandom | HostAccess::ReadWriteRandom => {
+            flags |= vkm::AllocationCreateFlags::HOST_ACCESS_RANDOM;
+            preferred_flags |= vk::MemoryPropertyFlags::HOST_CACHED;
+        }
+    }
+
+    vkm::AllocationCreateInfo {
+        usage,
+        flags,
+        preferred_flags,
+        ..Default::default()
     }
 }
 
 impl BufferImpl {
     pub fn new(device: RawDevice, info: &BufferInfo<'_>) -> Result<BufferImpl, GPUError> {
+        let create_info = vkm::AllocationCreateInfo {
+            usage: info.usage.into(),
+            flags: info.usage.into(),
+            required_flags: info.usage.into(),
+            ..Default::default()
+        };
+
+        Self::new_with_allocation(device, info, create_info)
+    }
+
+    pub fn new_with_allocation(
+        device: RawDevice,
+        info: &BufferInfo<'_>,
+        create_info: vkm::AllocationCreateInfo,
+    ) -> Result<BufferImpl, GPUError> {
         let sharing = if info.usage.contains(BufferUsage::SHARE) {
             vk::SharingMode::CONCURRENT
         } else {
@@ -197,13 +385,6 @@ impl BufferImpl {
             .size(info.size as u64)
             .sharing_mode(sharing)
             .usage(info.usage.into());
-
-        let create_info = vkm::AllocationCreateInfo {
-            usage: info.usage.into(),
-            flags: info.usage.into(),
-            required_flags: info.usage.into(),
-            ..Default::default()
-        };
 
         let (handle, allocation) =
             unsafe { device.allocator.create_buffer(&buffer_info, &create_info)? };
@@ -235,6 +416,22 @@ impl BufferImpl {
     pub unsafe fn unmap(&self) {
         let allocation = unsafe { self.allocation.get().as_mut().unwrap() };
         unsafe { self.device.allocator.unmap_memory(allocation) };
+    }
+
+    pub unsafe fn flush(&self, offset: usize, size: usize) {
+        let allocation = unsafe { &*self.allocation.get() };
+        self.device
+            .allocator
+            .flush_allocation(allocation, offset as vk::DeviceSize, size as vk::DeviceSize)
+            .expect("Flush Buffer Allocation");
+    }
+
+    pub unsafe fn invalidate(&self, offset: usize, size: usize) {
+        let allocation = unsafe { &*self.allocation.get() };
+        self.device
+            .allocator
+            .invalidate_allocation(allocation, offset as vk::DeviceSize, size as vk::DeviceSize)
+            .expect("Invalidate Buffer Allocation");
     }
 }
 

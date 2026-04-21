@@ -16,6 +16,7 @@ mod image;
 mod instance;
 mod pipeline;
 mod queue;
+mod resource;
 mod shader;
 mod swapchain;
 mod sync;
@@ -45,7 +46,7 @@ pub use bindless::{
     BINDLESS_SAMPLER_BINDING, BINDLESS_STORAGE_IMAGE_BINDING, BindlessHeap, BindlessInfo,
     ReadBufferHandle, RwBufferHandle, SampledImageHandle, SamplerHandle, StorageImageHandle,
 };
-pub use buffer::{Buffer, BufferInfo, BufferUsage};
+pub use buffer::{Buffer, BufferDesc, BufferInfo, BufferUsage, BufferUses};
 pub use command::{
     CommandBuffer, CommandPools, CommandRecorder, RenderInfo, SubmitInfo, ThreadCommandPool,
 };
@@ -58,23 +59,26 @@ pub use device::{Device, DeviceCreateInfo};
 pub use image::{
     BlitImageInfo, CopyImageInfo, Image, ImageCreateInfo, ImageLayout, ImageLayoutTransition,
     ImageTransition, ImageUsage, ImageView, ImageViewCreateInfo, ImageViewOptions, Sampler,
-    SamplerCreateInfo, ViewImage, ViewImageCreateInfo,
+    SamplerCreateInfo, Texture2DDesc, TextureUses, ViewImage, ViewImageCreateInfo,
 };
 pub use instance::{Instance, InstanceCreateInfo};
 pub use pipeline::{ComputePipeline, ComputePipelineInfo, RenderPipeline, RenderPipelineInfo};
 pub use queue::{Queue, QueueFamilyInfo, QueueRequest};
+pub use resource::{HostAccess, MemoryPreset};
 pub use shader::{Shader, ShaderEntry, ShaderSource};
 pub use swapchain::{Frame, Swapchain, SwapchainCreateInfo};
 pub use sync::Semaphore;
 
 pub enum GPUError {
     Vulkan(vk::Result),
+    Validation(&'static str),
 }
 
 impl fmt::Debug for GPUError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Vulkan(result) => write!(f, "Vulkan error: {:?}", result),
+            Self::Validation(message) => write!(f, "Validation error: {message}"),
         }
     }
 }
@@ -83,6 +87,7 @@ impl fmt::Display for GPUError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Vulkan(result) => write!(f, "Vulkan error: {:?}", result),
+            Self::Validation(message) => write!(f, "Validation error: {message}"),
         }
     }
 }
@@ -91,6 +96,7 @@ impl std::error::Error for GPUError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             Self::Vulkan(_) => None,
+            Self::Validation(_) => None,
         }
     }
 }

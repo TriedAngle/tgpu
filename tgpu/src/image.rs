@@ -3,7 +3,7 @@ use std::{fmt, ops, sync::Arc};
 use ash::vk;
 use vkm::Alloc;
 
-use crate::{Allocation, Device, Label, Queue, raw::RawDevice};
+use crate::{Allocation, Device, GPUError, Label, MemoryPreset, Queue, raw::RawDevice};
 
 // TODO: support custom stuff
 bitflags::bitflags! {
@@ -131,16 +131,195 @@ impl From<ImageUsage> for vk::MemoryPropertyFlags {
 impl From<ImageUsage> for vkm::AllocationCreateFlags {
     fn from(usage: ImageUsage) -> Self {
         let mut flags = vkm::AllocationCreateFlags::empty();
-        if (usage.contains(ImageUsage::HOST_VISIBLE) || usage.contains(ImageUsage::HOST))
-            && usage.contains(ImageUsage::MAP_WRITE)
-        {
-            if usage.contains(ImageUsage::RANDOM_ACCESS) {
+        if usage.contains(ImageUsage::HOST_VISIBLE) || usage.contains(ImageUsage::HOST) {
+            if usage.contains(ImageUsage::RANDOM_ACCESS) || usage.contains(ImageUsage::MAP_READ) {
                 flags |= vkm::AllocationCreateFlags::HOST_ACCESS_RANDOM;
-            } else {
+            } else if usage.contains(ImageUsage::MAP_WRITE) {
                 flags |= vkm::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE;
             }
         }
         flags
+    }
+}
+
+bitflags::bitflags! {
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct TextureUses: u32 {
+        const COPY_SRC = 1 << 0;
+        const COPY_DST = 1 << 1;
+        const SAMPLED = 1 << 2;
+        const STORAGE = 1 << 3;
+        const COLOR_ATTACHMENT = 1 << 4;
+        const DEPTH_STENCIL_ATTACHMENT = 1 << 5;
+        const INPUT_ATTACHMENT = 1 << 6;
+        const TRANSIENT_ATTACHMENT = 1 << 7;
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct Texture2DDesc<'a> {
+    pub size: [u32; 2],
+    pub format: vk::Format,
+    pub usage: TextureUses,
+    pub memory: MemoryPreset,
+    pub sampler: Option<SamplerCreateInfo<'a>>,
+    pub mip_levels: u32,
+    pub array_layers: u32,
+    pub samples: vk::SampleCountFlags,
+    pub tiling: vk::ImageTiling,
+    pub view_format: Option<vk::Format>,
+    pub label: Option<Label<'a>>,
+    pub view_label: Option<Label<'a>>,
+}
+
+impl Default for Texture2DDesc<'_> {
+    fn default() -> Self {
+        Self {
+            size: [0, 0],
+            format: vk::Format::UNDEFINED,
+            usage: TextureUses::empty(),
+            memory: MemoryPreset::GpuOnly,
+            sampler: None,
+            mip_levels: 1,
+            array_layers: 1,
+            samples: vk::SampleCountFlags::TYPE_1,
+            tiling: vk::ImageTiling::OPTIMAL,
+            view_format: None,
+            label: None,
+            view_label: None,
+        }
+    }
+}
+
+impl From<TextureUses> for ImageUsage {
+    fn from(usage: TextureUses) -> Self {
+        let mut raw = ImageUsage::empty();
+        if usage.contains(TextureUses::COPY_SRC) {
+            raw |= ImageUsage::COPY_SRC;
+        }
+        if usage.contains(TextureUses::COPY_DST) {
+            raw |= ImageUsage::COPY_DST;
+        }
+        if usage.contains(TextureUses::SAMPLED) {
+            raw |= ImageUsage::SAMPLED;
+        }
+        if usage.contains(TextureUses::STORAGE) {
+            raw |= ImageUsage::STORAGE;
+        }
+        if usage.contains(TextureUses::COLOR_ATTACHMENT) {
+            raw |= ImageUsage::COLOR;
+        }
+        if usage.contains(TextureUses::DEPTH_STENCIL_ATTACHMENT) {
+            raw |= ImageUsage::DEPTH_STENCIL;
+        }
+        if usage.contains(TextureUses::INPUT_ATTACHMENT) {
+            raw |= ImageUsage::INPUT;
+        }
+        if usage.contains(TextureUses::TRANSIENT_ATTACHMENT) {
+            raw |= ImageUsage::TRANSIENT;
+        }
+        raw
+    }
+}
+
+fn validate_texture_2d_desc(desc: &Texture2DDesc<'_>) -> Result<(), GPUError> {
+    if desc.size[0] == 0 || desc.size[1] == 0 {
+        return Err(GPUError::Validation(
+            "2D texture size must be greater than zero",
+        ));
+    }
+    if desc.format == vk::Format::UNDEFINED {
+        return Err(GPUError::Validation("2D texture format must be defined"));
+    }
+    if desc.mip_levels == 0 {
+        return Err(GPUError::Validation(
+            "2D texture mip_levels must be greater than zero",
+        ));
+    }
+    if desc.array_layers == 0 {
+        return Err(GPUError::Validation(
+            "2D texture array_layers must be greater than zero",
+        ));
+    }
+
+    let mut usage = desc.usage;
+    if desc.sampler.is_some() {
+        usage |= TextureUses::SAMPLED;
+    }
+    if usage.is_empty() {
+        return Err(GPUError::Validation("2D texture usage must not be empty"));
+    }
+
+    if usage.contains(TextureUses::TRANSIENT_ATTACHMENT) {
+        let attachment_usage = TextureUses::COLOR_ATTACHMENT
+            | TextureUses::DEPTH_STENCIL_ATTACHMENT
+            | TextureUses::INPUT_ATTACHMENT;
+
+        if !usage.intersects(attachment_usage) {
+            return Err(GPUError::Validation(
+                "TRANSIENT_ATTACHMENT requires COLOR_ATTACHMENT, DEPTH_STENCIL_ATTACHMENT, or INPUT_ATTACHMENT",
+            ));
+        }
+
+        let disallowed_usage = TextureUses::COPY_SRC
+            | TextureUses::COPY_DST
+            | TextureUses::SAMPLED
+            | TextureUses::STORAGE;
+        if usage.intersects(disallowed_usage) {
+            return Err(GPUError::Validation(
+                "TRANSIENT_ATTACHMENT cannot be combined with COPY_SRC, COPY_DST, SAMPLED, or STORAGE",
+            ));
+        }
+    }
+
+    if desc.memory == MemoryPreset::TransientAttachment
+        && !usage.contains(TextureUses::TRANSIENT_ATTACHMENT)
+    {
+        return Err(GPUError::Validation(
+            "TransientAttachment memory requires TRANSIENT_ATTACHMENT usage",
+        ));
+    }
+
+    if desc.samples != vk::SampleCountFlags::TYPE_1 && desc.mip_levels != 1 {
+        return Err(GPUError::Validation(
+            "multisampled 2D textures must use mip_levels = 1",
+        ));
+    }
+
+    if desc.samples != vk::SampleCountFlags::TYPE_1 && desc.tiling == vk::ImageTiling::LINEAR {
+        return Err(GPUError::Validation(
+            "multisampled 2D textures cannot use linear tiling",
+        ));
+    }
+
+    Ok(())
+}
+
+fn infer_texture_aspect(format: vk::Format, usage: TextureUses) -> vk::ImageAspectFlags {
+    if usage.contains(TextureUses::DEPTH_STENCIL_ATTACHMENT) {
+        return depth_stencil_aspect(format);
+    }
+
+    let depth_stencil = depth_stencil_aspect(format);
+    if !depth_stencil.is_empty() {
+        return depth_stencil;
+    }
+
+    vk::ImageAspectFlags::COLOR
+}
+
+fn depth_stencil_aspect(format: vk::Format) -> vk::ImageAspectFlags {
+    match format {
+        vk::Format::D16_UNORM | vk::Format::X8_D24_UNORM_PACK32 | vk::Format::D32_SFLOAT => {
+            vk::ImageAspectFlags::DEPTH
+        }
+        vk::Format::S8_UINT => vk::ImageAspectFlags::STENCIL,
+        vk::Format::D16_UNORM_S8_UINT
+        | vk::Format::D24_UNORM_S8_UINT
+        | vk::Format::D32_SFLOAT_S8_UINT => {
+            vk::ImageAspectFlags::DEPTH | vk::ImageAspectFlags::STENCIL
+        }
+        _ => vk::ImageAspectFlags::empty(),
     }
 }
 
@@ -281,7 +460,7 @@ pub struct BlitImageInfo<'a> {
 }
 
 impl SamplerImpl {
-    pub unsafe fn new(device: RawDevice, info: &SamplerCreateInfo<'_>) -> Self {
+    pub unsafe fn new(device: RawDevice, info: &SamplerCreateInfo<'_>) -> Result<Self, GPUError> {
         let mut create_info = vk::SamplerCreateInfo::default()
             .mag_filter(info.mag)
             .min_filter(info.min)
@@ -297,23 +476,18 @@ impl SamplerImpl {
             create_info.max_anisotropy = anisotropy;
         }
 
-        let handle = unsafe {
-            device
-                .handle
-                .create_sampler(&create_info, None)
-                .expect("Sampler")
-        };
+        let handle = unsafe { device.handle.create_sampler(&create_info, None) }?;
 
         if let Some(label) = &info.label {
             unsafe { device.attach_label(handle, label) };
         }
 
-        Self { handle, device }
+        Ok(Self { handle, device })
     }
 }
 
 impl ImageViewImpl {
-    pub unsafe fn new(device: RawDevice, info: &ImageViewCreateInfo<'_>) -> Self {
+    pub unsafe fn new(device: RawDevice, info: &ImageViewCreateInfo<'_>) -> Result<Self, GPUError> {
         let options = &info.options;
         let mut create_info = vk::ImageViewCreateInfo::default()
             .image(info.image.inner.handle)
@@ -333,27 +507,22 @@ impl ImageViewImpl {
             create_info.format = format;
         }
 
-        let handle = unsafe {
-            device
-                .handle
-                .create_image_view(&create_info, None)
-                .expect("Image View")
-        };
+        let handle = unsafe { device.handle.create_image_view(&create_info, None) }?;
 
         if let Some(label) = &options.label {
             unsafe { device.attach_label(handle, label) };
         }
 
-        Self {
+        Ok(Self {
             handle,
             device,
             image: info.image.inner.clone(),
-        }
+        })
     }
 }
 
 impl ImageImpl {
-    pub unsafe fn new(device: RawDevice, info: &ImageCreateInfo<'_>) -> Self {
+    pub unsafe fn new(device: RawDevice, info: &ImageCreateInfo<'_>) -> Result<Self, GPUError> {
         let image_info = vk::ImageCreateInfo::default()
             .image_type(info.ty)
             .format(info.format)
@@ -361,6 +530,7 @@ impl ImageImpl {
             .mip_levels(info.mips)
             .array_layers(info.layers)
             .samples(info.samples)
+            .tiling(info.tiling)
             .usage(info.usage.into())
             .sharing_mode(info.sharing)
             .initial_layout(info.layout.into())
@@ -373,12 +543,8 @@ impl ImageImpl {
             ..Default::default()
         };
 
-        let (handle, allocation) = unsafe {
-            device
-                .allocator
-                .create_image(&image_info, &create_info)
-                .expect("Allocate Image")
-        };
+        let (handle, allocation) =
+            unsafe { device.allocator.create_image(&image_info, &create_info) }?;
 
         let allocation = Some(Allocation {
             handle: allocation,
@@ -389,60 +555,136 @@ impl ImageImpl {
             unsafe { device.attach_label(handle, label) };
         }
 
-        Self {
+        Ok(Self {
             handle,
             device,
             allocation,
-        }
+        })
     }
 }
 
 impl Device {
-    pub fn create_sampler(&self, info: &SamplerCreateInfo<'_>) -> Sampler {
-        let inner = unsafe { SamplerImpl::new(self.inner.clone(), info) };
-        Sampler {
+    pub fn try_create_sampler(&self, info: &SamplerCreateInfo<'_>) -> Result<Sampler, GPUError> {
+        let inner = unsafe { SamplerImpl::new(self.inner.clone(), info)? };
+        Ok(Sampler {
             inner: Arc::new(inner),
-        }
+        })
     }
-    pub fn create_image_view(&self, info: &ImageViewCreateInfo<'_>) -> ImageView {
-        let inner = unsafe { ImageViewImpl::new(self.inner.clone(), info) };
+
+    pub fn create_sampler(&self, info: &SamplerCreateInfo<'_>) -> Sampler {
+        self.try_create_sampler(info).expect("Create Sampler")
+    }
+
+    pub fn try_create_image_view(
+        &self,
+        info: &ImageViewCreateInfo<'_>,
+    ) -> Result<ImageView, GPUError> {
+        let inner = unsafe { ImageViewImpl::new(self.inner.clone(), info)? };
         let sampler = info.options.sampler.cloned();
-        ImageView { inner, sampler }
+        Ok(ImageView { inner, sampler })
     }
-    pub fn create_image(&self, info: &ImageCreateInfo<'_>) -> Image {
-        let inner = unsafe { ImageImpl::new(self.inner.clone(), info) };
-        Image {
+
+    pub fn create_image_view(&self, info: &ImageViewCreateInfo<'_>) -> ImageView {
+        self.try_create_image_view(info).expect("Create Image View")
+    }
+
+    pub fn try_create_image(&self, info: &ImageCreateInfo<'_>) -> Result<Image, GPUError> {
+        let inner = unsafe { ImageImpl::new(self.inner.clone(), info)? };
+        Ok(Image {
             inner: Arc::new(inner),
             format: info.format,
-        }
+        })
     }
-    pub fn create_sampled_image(&self, info: &ViewImageCreateInfo<'_>) -> ViewImage {
+
+    pub fn create_image(&self, info: &ImageCreateInfo<'_>) -> Image {
+        self.try_create_image(info).expect("Create Image")
+    }
+
+    pub fn try_create_sampled_image(
+        &self,
+        info: &ViewImageCreateInfo<'_>,
+    ) -> Result<ViewImage, GPUError> {
         let ViewImageCreateInfo {
             image: image_info,
             view: image_view_options,
             sampler: sampler_info,
         } = info;
 
-        let image = self.create_image(image_info);
+        let image = self.try_create_image(image_info)?;
 
         let mut image_view_info = ImageViewCreateInfo {
             image: &image,
-            options: image_view_options.clone(), // note this is cringe
+            options: image_view_options.clone(),
         };
 
         let mut sampler = None;
         if let Some(sampler_info) = sampler_info {
-            sampler = Some(self.create_sampler(sampler_info));
+            sampler = Some(self.try_create_sampler(sampler_info)?);
             image_view_info.options.sampler = sampler.as_ref();
         }
 
-        let view = self.create_image_view(&image_view_info);
+        let view = self.try_create_image_view(&image_view_info)?;
 
-        ViewImage {
+        Ok(ViewImage {
             image,
             sampler,
             view,
+        })
+    }
+
+    pub fn create_sampled_image(&self, info: &ViewImageCreateInfo<'_>) -> ViewImage {
+        self.try_create_sampled_image(info)
+            .expect("Create Sampled Image")
+    }
+
+    pub fn create_texture_2d(&self, desc: &Texture2DDesc<'_>) -> Result<ViewImage, GPUError> {
+        validate_texture_2d_desc(desc)?;
+
+        let mut usage = ImageUsage::from(desc.usage);
+        if desc.sampler.is_some() {
+            usage |= ImageUsage::SAMPLED;
         }
+
+        usage |= match desc.memory {
+            MemoryPreset::GpuOnly => ImageUsage::DEVICE,
+            MemoryPreset::TransientAttachment => ImageUsage::LAZY,
+            MemoryPreset::Upload | MemoryPreset::Readback | MemoryPreset::Dynamic => {
+                return Err(GPUError::Validation(
+                    "Texture2DDesc only supports GpuOnly or TransientAttachment memory; use create_image for explicit image allocation",
+                ));
+            }
+        };
+
+        self.try_create_sampled_image(&ViewImageCreateInfo {
+            image: &ImageCreateInfo {
+                format: desc.format,
+                ty: vk::ImageType::TYPE_2D,
+                volume: vk::Extent3D {
+                    width: desc.size[0],
+                    height: desc.size[1],
+                    depth: 1,
+                },
+                mips: desc.mip_levels,
+                layers: desc.array_layers,
+                tiling: desc.tiling,
+                samples: desc.samples,
+                usage,
+                sharing: vk::SharingMode::EXCLUSIVE,
+                layout: ImageLayout::Undefined,
+                label: desc.label.clone(),
+            },
+            sampler: desc.sampler.as_ref(),
+            view: ImageViewOptions {
+                sampler: None,
+                ty: vk::ImageViewType::TYPE_2D,
+                format: desc.view_format,
+                aspect: infer_texture_aspect(desc.format, desc.usage),
+                swizzle: vk::ComponentMapping::default(),
+                mips: 0..desc.mip_levels,
+                layers: 0..desc.array_layers,
+                label: desc.view_label.clone(),
+            },
+        })
     }
 }
 

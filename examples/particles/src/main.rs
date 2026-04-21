@@ -132,56 +132,32 @@ impl Render {
             ];
         }
 
-        let particle_buffer = device.create_buffer(&tgpu::BufferInfo {
+        let particle_buffer = device.create_buffer_with(&tgpu::BufferDesc {
             label: Some(tgpu::Label::Name("particle buffer")),
             size: std::mem::size_of::<Particle>() * PARTICLE_COUNT,
-            usage: tgpu::BufferUsage::STORAGE
-                | tgpu::BufferUsage::COPY_DST
-                | tgpu::BufferUsage::MAP_WRITE
-                | tgpu::BufferUsage::DEVICE
-                | tgpu::BufferUsage::COHERENT
-                | tgpu::BufferUsage::HOST_VISIBLE
-                | tgpu::BufferUsage::MAP_READ
-                | tgpu::BufferUsage::MAP_WRITE,
+            usage: tgpu::BufferUses::STORAGE | tgpu::BufferUses::COPY_DST,
+            memory: tgpu::MemoryPreset::Dynamic,
+            host_access: tgpu::HostAccess::ReadWriteRandom,
+            ..Default::default()
         })?;
 
-        particle_buffer.write(bytemuck::cast_slice(&particles), 0);
+        particle_buffer.write_slice(&particles);
 
-        let present_image = device.create_sampled_image(&tgpu::ViewImageCreateInfo {
-            image: &tgpu::ImageCreateInfo {
-                format: swapchain.format(),
-                ty: vk::ImageType::TYPE_2D,
-                volume: vk::Extent3D {
-                    width: swapchain.extent().width,
-                    height: swapchain.extent().height,
-                    depth: 1,
-                },
-                mips: 1,
-                layers: 1,
-                samples: vk::SampleCountFlags::TYPE_1,
-                tiling: vk::ImageTiling::OPTIMAL,
-                usage: tgpu::ImageUsage::COPY_SRC
-                    | tgpu::ImageUsage::COPY_DST
-                    | tgpu::ImageUsage::STORAGE
-                    | tgpu::ImageUsage::COLOR
-                    | tgpu::ImageUsage::DEVICE
-                    | tgpu::ImageUsage::SAMPLED, // TODO: sampled should be automated
-                ..Default::default()
-            },
-            sampler: Some(&tgpu::SamplerCreateInfo {
+        let present_image = device.create_texture_2d(&tgpu::Texture2DDesc {
+            label: Some(tgpu::Label::Name("present image")),
+            size: [swapchain.extent().width, swapchain.extent().height],
+            format: swapchain.format(),
+            usage: tgpu::TextureUses::COPY_SRC
+                | tgpu::TextureUses::COPY_DST
+                | tgpu::TextureUses::STORAGE
+                | tgpu::TextureUses::COLOR_ATTACHMENT
+                | tgpu::TextureUses::SAMPLED,
+            sampler: Some(tgpu::SamplerCreateInfo {
                 label: Some(tgpu::Label::Name("Present Sampler")),
                 ..Default::default()
             }),
-            view: tgpu::ImageViewOptions {
-                ty: vk::ImageViewType::TYPE_2D, // TODO: this should probably be automatic,
-                // investigate this
-                format: Some(swapchain.format()),
-                mips: 0..1,
-                layers: 0..1,
-                aspect: vk::ImageAspectFlags::COLOR,
-                ..Default::default()
-            },
-        });
+            ..Default::default()
+        })?;
 
         let bindless = device.create_bindless_heap(&tgpu::BindlessInfo {
             max_rw_buffers: 1,
@@ -437,41 +413,25 @@ impl Render {
 
         let present_image = self
             .device
-            .create_sampled_image(&tgpu::ViewImageCreateInfo {
-                image: &tgpu::ImageCreateInfo {
-                    format: self.swapchain.format(),
-                    ty: vk::ImageType::TYPE_2D,
-                    volume: vk::Extent3D {
-                        width: self.swapchain.extent().width,
-                        height: self.swapchain.extent().height,
-                        depth: 1,
-                    },
-                    mips: 1,
-                    layers: 1,
-                    samples: vk::SampleCountFlags::TYPE_1,
-                    tiling: vk::ImageTiling::OPTIMAL,
-                    usage: tgpu::ImageUsage::COPY_SRC
-                        | tgpu::ImageUsage::COPY_DST
-                        | tgpu::ImageUsage::STORAGE
-                        | tgpu::ImageUsage::COLOR
-                        | tgpu::ImageUsage::DEVICE
-                        | tgpu::ImageUsage::SAMPLED, // TODO: sampled should be automated
-                    ..Default::default()
-                },
-                sampler: Some(&tgpu::SamplerCreateInfo {
+            .create_texture_2d(&tgpu::Texture2DDesc {
+                label: Some(tgpu::Label::Name("present image")),
+                size: [
+                    self.swapchain.extent().width,
+                    self.swapchain.extent().height,
+                ],
+                format: self.swapchain.format(),
+                usage: tgpu::TextureUses::COPY_SRC
+                    | tgpu::TextureUses::COPY_DST
+                    | tgpu::TextureUses::STORAGE
+                    | tgpu::TextureUses::COLOR_ATTACHMENT
+                    | tgpu::TextureUses::SAMPLED,
+                sampler: Some(tgpu::SamplerCreateInfo {
                     label: Some(tgpu::Label::Name("Present Sampler")),
                     ..Default::default()
                 }),
-                view: tgpu::ImageViewOptions {
-                    ty: vk::ImageViewType::TYPE_2D, // TODO: this should probably be automatic,
-                    // investigate this
-                    format: Some(self.swapchain.format()),
-                    mips: 0..1,
-                    layers: 0..1,
-                    aspect: vk::ImageAspectFlags::COLOR,
-                    ..Default::default()
-                },
-            });
+                ..Default::default()
+            })
+            .expect("Create Present Image");
 
         self.bindless.update_storage_image(
             self.pc.output_image,
