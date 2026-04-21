@@ -1,11 +1,13 @@
 use rand::Rng;
-use tgpu::ash::vk;
 
 const SHADER: &str = include_str!("./shader.slang");
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct Push {
+    a: tgpu::ReadBufferHandle,
+    b: tgpu::ReadBufferHandle,
+    c: tgpu::RwBufferHandle,
     m: u32,
     n: u32,
     k: u32,
@@ -87,59 +89,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     buf_a.write(bytemuck::cast_slice(&host_a), 0);
     buf_b.write(bytemuck::cast_slice(&host_b_t), 0);
 
-    let dsl = device.create_descriptor_set_layout(&tgpu::DescriptorSetLayoutInfo {
-        label: Some(tgpu::Label::Name("MatMul DSL")),
-        flags: vk::DescriptorSetLayoutCreateFlags::empty(),
-        bindings: &[
-            tgpu::DescriptorBinding::unique(
-                0,
-                tgpu::DescriptorType::StorageBuffer,
-                tgpu::ShaderStageFlags::COMPUTE,
-            ),
-            tgpu::DescriptorBinding::unique(
-                1,
-                tgpu::DescriptorType::StorageBuffer,
-                tgpu::ShaderStageFlags::COMPUTE,
-            ),
-            tgpu::DescriptorBinding::unique(
-                2,
-                tgpu::DescriptorType::StorageBuffer,
-                tgpu::ShaderStageFlags::COMPUTE,
-            ),
-        ],
+    let bindless = device.create_bindless_heap(&tgpu::BindlessInfo {
+        max_read_buffers: 2,
+        max_rw_buffers: 1,
+        ..Default::default()
     });
 
-    let pool = device.create_descriptor_pool(&tgpu::DescriptorPoolInfo {
-        label: Some(tgpu::Label::Name("MatMul Pool")),
-        max_sets: 1,
-        layouts: &[&dsl],
-        flags: vk::DescriptorPoolCreateFlags::empty(),
-    });
-
-    let dset = device.create_descriptor_set(pool.clone(), &dsl);
-    dset.write(&[
-        tgpu::DescriptorWrite::StorageBuffer {
-            binding: 0,
-            buffer: &buf_a,
-            offset: 0,
-            range: vk::WHOLE_SIZE,
-            array_element: None,
-        },
-        tgpu::DescriptorWrite::StorageBuffer {
-            binding: 1,
-            buffer: &buf_b,
-            offset: 0,
-            range: vk::WHOLE_SIZE,
-            array_element: None,
-        },
-        tgpu::DescriptorWrite::StorageBuffer {
-            binding: 2,
-            buffer: &buf_c,
-            offset: 0,
-            range: vk::WHOLE_SIZE,
-            array_element: None,
-        },
-    ]);
+    let buf_a_handle = bindless.add_read_buffer(&buf_a);
+    let buf_b_handle = bindless.add_read_buffer(&buf_b);
+    let buf_c_handle = bindless.add_rw_buffer(&buf_c);
 
     let shader = device
         .create_shader(None, tgpu::ShaderSource::Slang(SHADER.as_bytes()))
@@ -149,18 +107,25 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         label: Some(tgpu::Label::Name("MatMul Pipeline")),
         shader: shader.entry("main"),
         push_constant_size: Some(std::mem::size_of::<Push>() as u32),
-        descriptor_layouts: &[&dsl],
+        descriptor_layouts: &[bindless.layout()],
         cache: None,
     });
 
     let tile: u32 = 16;
     let groups_x = n.div_ceil(tile);
     let groups_y = m.div_ceil(tile);
-    let push = Push { m, n, k };
+    let push = Push {
+        a: buf_a_handle,
+        b: buf_b_handle,
+        c: buf_c_handle,
+        m,
+        n,
+        k,
+    };
 
     let mut rec = queue.record();
     rec.bind_compute_pipeline(&pipeline);
-    rec.bind_compute_descriptor_set(&dset, &pipeline, 0, &[]);
+    rec.bind_compute_descriptor_set(bindless.descriptor_set(), &pipeline, 0, &[]);
     rec.push_compute_constants(&pipeline, push);
     rec.dispatch(groups_x, groups_y, 1);
 

@@ -6,6 +6,7 @@ use ash::vk;
 
 mod adapter;
 mod allocations;
+mod bindless;
 mod buffer;
 mod command;
 mod debug;
@@ -38,6 +39,11 @@ pub use ash;
 pub use ash::vk::{
     ColorSpaceKHR, CullModeFlags, Format, FrontFace, PolygonMode, PresentModeKHR,
     PrimitiveTopology, QueueFlags, ShaderStageFlags,
+};
+pub use bindless::{
+    BINDLESS_READ_BUFFER_BINDING, BINDLESS_RW_BUFFER_BINDING, BINDLESS_SAMPLED_IMAGE_BINDING,
+    BINDLESS_SAMPLER_BINDING, BINDLESS_STORAGE_IMAGE_BINDING, BindlessHeap, BindlessInfo,
+    ReadBufferHandle, RwBufferHandle, SampledImageHandle, SamplerHandle, StorageImageHandle,
 };
 pub use buffer::{Buffer, BufferInfo, BufferUsage};
 pub use command::{

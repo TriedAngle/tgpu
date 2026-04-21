@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use rand::Rng;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use tgpu::ash::vk;
@@ -15,9 +13,14 @@ use winit::{
 #[repr(C)]
 #[derive(Clone, Copy, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 struct PushConstants {
+    output_image: tgpu::StorageImageHandle,
+    particles: tgpu::RwBufferHandle,
+    present_texture: tgpu::SampledImageHandle,
+    present_sampler: tgpu::SamplerHandle,
     window: [u32; 2],
     mouse: [f32; 2],
     dt: f32,
+    _pad: f32,
 }
 
 #[repr(C)]
@@ -50,9 +53,7 @@ pub struct Render {
     particles: Vec<Particle>,
     particle_buffer: tgpu::Buffer,
     present_image: tgpu::ViewImage,
-    layout: tgpu::DescriptorSetLayout,
-    pool: Arc<tgpu::DescriptorPool>,
-    descriptor_set: tgpu::DescriptorSet,
+    bindless: tgpu::BindlessHeap,
 
     present_pipeline: tgpu::RenderPipeline,
     compute_pipeline: tgpu::ComputePipeline,
@@ -146,44 +147,6 @@ impl Render {
 
         particle_buffer.write(bytemuck::cast_slice(&particles), 0);
 
-        let layout = device.create_descriptor_set_layout(&tgpu::DescriptorSetLayoutInfo {
-            label: Some(tgpu::Label::Name("Descriptor Set")),
-            flags: vk::DescriptorSetLayoutCreateFlags::empty(),
-            bindings: &[
-                tgpu::DescriptorBinding::unique(
-                    0,
-                    tgpu::DescriptorType::StorageImage,
-                    tgpu::ShaderStageFlags::COMPUTE,
-                ),
-                tgpu::DescriptorBinding::unique(
-                    1,
-                    tgpu::DescriptorType::StorageBuffer,
-                    tgpu::ShaderStageFlags::COMPUTE,
-                ),
-                tgpu::DescriptorBinding::unique(
-                    2,
-                    tgpu::DescriptorType::SampledImage,
-                    tgpu::ShaderStageFlags::FRAGMENT,
-                ),
-                tgpu::DescriptorBinding::unique(
-                    3,
-                    tgpu::DescriptorType::Sampler,
-                    tgpu::ShaderStageFlags::FRAGMENT,
-                ),
-            ],
-        });
-
-        // TODO: I don't think should be an Arc<>, we should hide the smart pointer !
-        let pool = device.create_descriptor_pool(&tgpu::DescriptorPoolInfo {
-            label: Some(tgpu::Label::Name("Descriptor Pool")),
-            max_sets: 1,
-            layouts: &[&layout],
-            flags: vk::DescriptorPoolCreateFlags::empty(),
-        });
-
-        let descriptor_set = device.create_descriptor_set(pool.clone(), &layout);
-
-        // TODO: this api is a mess right now
         let present_image = device.create_sampled_image(&tgpu::ViewImageCreateInfo {
             image: &tgpu::ImageCreateInfo {
                 format: swapchain.format(),
@@ -220,33 +183,22 @@ impl Render {
             },
         });
 
-        // TODO: maybe use impl trait here, so writing &image would be enough
-        descriptor_set.write(&[
-            tgpu::DescriptorWrite::StorageImage {
-                binding: 0,
-                image_view: &present_image.view,
-                image_layout: vk::ImageLayout::GENERAL,
-                array_element: None,
-            },
-            tgpu::DescriptorWrite::StorageBuffer {
-                binding: 1,
-                buffer: &particle_buffer,
-                offset: 0,
-                range: vk::WHOLE_SIZE,
-                array_element: None,
-            },
-            tgpu::DescriptorWrite::SampledImage {
-                binding: 2,
-                image_view: &present_image.view,
-                image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                array_element: None,
-            },
-            tgpu::DescriptorWrite::Sampler {
-                binding: 3,
-                sampler: present_image.sampler.as_ref().unwrap(),
-                array_element: None,
-            },
-        ]);
+        let bindless = device.create_bindless_heap(&tgpu::BindlessInfo {
+            max_rw_buffers: 1,
+            max_sampled_images: 1,
+            max_storage_images: 1,
+            max_samplers: 1,
+            ..Default::default()
+        });
+
+        let particle_buffer_handle = bindless.add_rw_buffer(&particle_buffer);
+        let present_storage_image_handle =
+            bindless.add_storage_image(&present_image.view, vk::ImageLayout::GENERAL);
+        let present_texture_handle = bindless.add_sampled_image(
+            &present_image.view,
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+        );
+        let present_sampler_handle = bindless.add_sampler(present_image.sampler.as_ref().unwrap());
 
         const SHADER: &str = include_str!("./shader.slang");
 
@@ -258,14 +210,14 @@ impl Render {
             label: Some(tgpu::Label::Name("Compute Pipeline")),
             shader: shader.entry("computeMain"),
             push_constant_size: Some(std::mem::size_of::<PushConstants>() as u32),
-            descriptor_layouts: &[&layout],
+            descriptor_layouts: &[bindless.layout()],
             cache: None,
         });
 
         let clear_pipeline = device.create_compute_pipeline(&tgpu::ComputePipelineInfo {
             label: Some(tgpu::Label::Name("Clear Pipeline")),
             shader: shader.entry("computeClear"),
-            descriptor_layouts: &[&layout],
+            descriptor_layouts: &[bindless.layout()],
             push_constant_size: Some(std::mem::size_of::<PushConstants>() as u32),
             cache: None,
         });
@@ -276,8 +228,8 @@ impl Render {
             fragment_shader: shader.entry("fragmentMain"),
             color_formats: &[swapchain.format()],
             depth_format: None,
-            descriptor_layouts: &[&layout],
-            push_constant_size: None,
+            descriptor_layouts: &[bindless.layout()],
+            push_constant_size: Some(std::mem::size_of::<PushConstants>() as u32),
             blend_states: None,
             vertex_input_state: None,
             topology: tgpu::PrimitiveTopology::TRIANGLE_LIST,
@@ -287,9 +239,14 @@ impl Render {
         });
 
         let pc = PushConstants {
+            output_image: present_storage_image_handle,
+            particles: particle_buffer_handle,
+            present_texture: present_texture_handle,
+            present_sampler: present_sampler_handle,
             window: [size.width, size.height],
             mouse: [0.; 2],
             dt: 0.,
+            _pad: 0.0,
         };
 
         let new = Self {
@@ -301,9 +258,7 @@ impl Render {
             particles,
             particle_buffer,
             present_image,
-            layout,
-            pool,
-            descriptor_set,
+            bindless,
             present_pipeline,
             compute_pipeline,
             clear_pipeline,
@@ -335,14 +290,24 @@ impl Render {
 
         let particle_groups = PARTICLE_COUNT.div_ceil(256);
         recorder.bind_compute_pipeline(&self.compute_pipeline);
-        recorder.bind_compute_descriptor_set(&self.descriptor_set, &self.compute_pipeline, 0, &[]);
+        recorder.bind_compute_descriptor_set(
+            self.bindless.descriptor_set(),
+            &self.compute_pipeline,
+            0,
+            &[],
+        );
         recorder.push_compute_constants(&self.compute_pipeline, self.pc);
         recorder.dispatch(particle_groups as u32, 1, 1);
 
         let width = self.swapchain.extent().width.div_ceil(16);
         let height = self.swapchain.extent().height.div_ceil(16);
         recorder.bind_compute_pipeline(&self.clear_pipeline);
-        recorder.bind_compute_descriptor_set(&self.descriptor_set, &self.clear_pipeline, 0, &[]);
+        recorder.bind_compute_descriptor_set(
+            self.bindless.descriptor_set(),
+            &self.clear_pipeline,
+            0,
+            &[],
+        );
         recorder.push_compute_constants(&self.clear_pipeline, self.pc);
         recorder.dispatch(width, height, 1);
 
@@ -382,7 +347,13 @@ impl Render {
             });
 
         recorder.bind_render_pipeline(&self.present_pipeline);
-        recorder.bind_render_descriptor_set(&self.descriptor_set, &self.present_pipeline, 0, &[]);
+        recorder.bind_render_descriptor_set(
+            self.bindless.descriptor_set(),
+            &self.present_pipeline,
+            0,
+            &[],
+        );
+        recorder.push_render_constants(&self.present_pipeline, self.pc);
 
         recorder.begin_render(
             &tgpu::RenderInfo {
@@ -502,25 +473,20 @@ impl Render {
                 },
             });
 
-        self.descriptor_set.write(&[
-            tgpu::DescriptorWrite::StorageImage {
-                binding: 0,
-                image_view: &present_image.view,
-                image_layout: vk::ImageLayout::GENERAL,
-                array_element: None,
-            },
-            tgpu::DescriptorWrite::SampledImage {
-                binding: 2,
-                image_view: &present_image.view,
-                image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-                array_element: None,
-            },
-            tgpu::DescriptorWrite::Sampler {
-                binding: 3,
-                sampler: present_image.sampler.as_ref().unwrap(),
-                array_element: None,
-            },
-        ]);
+        self.bindless.update_storage_image(
+            self.pc.output_image,
+            &present_image.view,
+            vk::ImageLayout::GENERAL,
+        );
+        self.bindless.update_sampled_image(
+            self.pc.present_texture,
+            &present_image.view,
+            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+        );
+        self.bindless.update_sampler(
+            self.pc.present_sampler,
+            present_image.sampler.as_ref().unwrap(),
+        );
 
         self.present_image = present_image;
     }

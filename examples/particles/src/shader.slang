@@ -5,16 +5,27 @@ struct Particle {
 }
 
 struct PushConstants { 
+    uint output_image;
+    uint particles;
+    uint present_texture;
+    uint present_sampler;
     uint2 window;
     float2 mouse;
     float delta_time;
+    float pad0;
 }
 
-[[vk::binding(0, 0)]]
-RWTexture2D<unorm float4> output_texture;
-
 [[vk::binding(1, 0)]]
-RWStructuredBuffer<Particle> particles;
+RWStructuredBuffer<Particle> particle_buffers[];
+
+[[vk::binding(2, 0)]]
+Texture2D<float4> sampled_images[];
+
+[[vk::binding(3, 0)]]
+RWTexture2D<unorm float4> storage_images[];
+
+[[vk::binding(4, 0)]]
+SamplerState samplers[];
 
 [[vk::push_constant]]
 cbuffer PC {
@@ -29,12 +40,12 @@ void computeClear(uint3 global_id : SV_DispatchThreadID) {
 
     int2 coord = int2(global_id.xy);
 
-    float4 current = output_texture[coord];
+    float4 current = storage_images[pc.output_image][coord];
 
     float  fade_speed = 0.95;
     float4 faded      = float4(current.rgb * fade_speed, current.a);
 
-    output_texture[coord] = faded;
+    storage_images[pc.output_image][coord] = faded;
 }
 
 [shader("compute")]
@@ -43,7 +54,7 @@ void computeMain(uint3 global_id : SV_DispatchThreadID)
 {
     uint idx = global_id.x;
 
-    Particle particle = particles[idx];
+    Particle particle = particle_buffers[pc.particles][idx];
 
     particle.position += particle.velocity * pc.delta_time;
 
@@ -75,16 +86,16 @@ void computeMain(uint3 global_id : SV_DispatchThreadID)
         particle.velocity = normalize(particle.velocity) * max_speed;
     }
 
-    particles[idx] = particle;
+    particle_buffers[pc.particles][idx] = particle;
 
     int2 pos = int2(particle.position);
 
     if (pos.x >= 0 && pos.x < int(pc.window.x) &&
         pos.y >= 0 && pos.y < int(pc.window.y))
     {
-        float4 current  = output_texture[pos];
+        float4 current  = storage_images[pc.output_image][pos];
         float4 blended  = max(current, particle.color);
-        output_texture[pos] = blended;
+        storage_images[pc.output_image][pos] = blended;
     }
 }
 
@@ -92,12 +103,6 @@ struct VertexOutput {
     float4 pos : SV_Position;
     float2 uv;
 };
-
-[[vk::binding(2, 0)]]
-Texture2D<float4> tex;
-
-[[vk::binding(3, 0)]]
-SamplerState tex_sampler;
 
 [shader("vertex")]
 VertexOutput vertexMain(uint vert_idx : SV_VertexID)
@@ -131,5 +136,5 @@ VertexOutput vertexMain(uint vert_idx : SV_VertexID)
 
 [shader("fragment")]
 float4 fragmentMain(float2 uv : TEXCOORD0) : SV_Target0 {
-    return tex.Sample(tex_sampler, uv);
+    return sampled_images[pc.present_texture].Sample(samplers[pc.present_sampler], uv);
 }

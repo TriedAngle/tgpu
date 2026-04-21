@@ -10,6 +10,9 @@
 static const uint TILE_SIZE = 16;
 
 struct MatMulParams {
+    uint a;
+    uint b;
+    uint c;
     uint M;  // rows of A and C
     uint N;  // cols of B and C
     uint K;  // cols of A / rows of B (multiple of 16)
@@ -18,14 +21,11 @@ struct MatMulParams {
 [[vk::push_constant]]
 MatMulParams gParams;
 
-[[vk::binding(0)]]
-StructuredBuffer<float4> bufferA;   // A: M x (K/4) in float4
+[[vk::binding(0, 0)]]
+StructuredBuffer<float4> readFloat4Buffers[];
 
-[[vk::binding(1)]]
-StructuredBuffer<float4> bufferB;   // B^T: N x (K/4) in float4
-
-[[vk::binding(2)]]
-RWStructuredBuffer<float> bufferC;  // C: M x N, row-major floats
+[[vk::binding(1, 0)]]
+RWStructuredBuffer<float> rwFloatBuffers[];
 
 groupshared float4 tileA[TILE_SIZE][TILE_SIZE / 4]; // 16 x 4
 groupshared float4 tileB[TILE_SIZE][TILE_SIZE / 4]; // 16 x 4
@@ -62,12 +62,12 @@ void main(
 
         if (localCol < TILE_K4) {
             uint aIndex4 = row * K4 + (k4Base + localCol);
-            tileA[localRow][localCol] = bufferA[aIndex4];
+            tileA[localRow][localCol] = readFloat4Buffers[gParams.a][aIndex4];
         }
 
         if (localRow < TILE_K4) {
             uint bIndex4 = col * K4 + (k4Base + localRow);
-            tileB[localCol][localRow] = bufferB[bIndex4];
+            tileB[localCol][localRow] = readFloat4Buffers[gParams.b][bIndex4];
         }
 
         GroupMemoryBarrierWithGroupSync();
@@ -82,6 +82,5 @@ void main(
         GroupMemoryBarrierWithGroupSync();
     }
 
-    bufferC[row * N + col] = acc;
+    rwFloatBuffers[gParams.c][row * N + col] = acc;
 }
-
