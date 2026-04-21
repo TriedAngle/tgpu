@@ -132,7 +132,7 @@ impl Render {
             ];
         }
 
-        let particle_buffer = device.create_buffer_with(&tgpu::BufferDesc {
+        let particle_buffer = device.create_buffer(&tgpu::BufferDesc {
             label: Some(tgpu::Label::Name("particle buffer")),
             size: std::mem::size_of::<Particle>() * PARTICLE_COUNT,
             usage: tgpu::BufferUses::STORAGE | tgpu::BufferUses::COPY_DST,
@@ -143,15 +143,22 @@ impl Render {
 
         particle_buffer.write_slice(&particles);
 
-        let present_image = device.create_texture_2d(&tgpu::Texture2DDesc {
-            label: Some(tgpu::Label::Name("present image")),
-            size: [swapchain.extent().width, swapchain.extent().height],
-            format: swapchain.format(),
-            usage: tgpu::TextureUses::COPY_SRC
-                | tgpu::TextureUses::COPY_DST
-                | tgpu::TextureUses::STORAGE
-                | tgpu::TextureUses::COLOR_ATTACHMENT
-                | tgpu::TextureUses::SAMPLED,
+        let present_image = device.create_view_image(&tgpu::ViewImageDesc {
+            image: tgpu::ImageDesc {
+                label: Some(tgpu::Label::Name("present image")),
+                format: swapchain.format(),
+                extent: vk::Extent3D {
+                    width: swapchain.extent().width,
+                    height: swapchain.extent().height,
+                    depth: 1,
+                },
+                usage: tgpu::ImageUses::COPY_SRC
+                    | tgpu::ImageUses::COPY_DST
+                    | tgpu::ImageUses::STORAGE
+                    | tgpu::ImageUses::COLOR_ATTACHMENT
+                    | tgpu::ImageUses::SAMPLED,
+                ..Default::default()
+            },
             sampler: Some(tgpu::SamplerCreateInfo {
                 label: Some(tgpu::Label::Name("Present Sampler")),
                 ..Default::default()
@@ -413,18 +420,22 @@ impl Render {
 
         let present_image = self
             .device
-            .create_texture_2d(&tgpu::Texture2DDesc {
-                label: Some(tgpu::Label::Name("present image")),
-                size: [
-                    self.swapchain.extent().width,
-                    self.swapchain.extent().height,
-                ],
-                format: self.swapchain.format(),
-                usage: tgpu::TextureUses::COPY_SRC
-                    | tgpu::TextureUses::COPY_DST
-                    | tgpu::TextureUses::STORAGE
-                    | tgpu::TextureUses::COLOR_ATTACHMENT
-                    | tgpu::TextureUses::SAMPLED,
+            .create_view_image(&tgpu::ViewImageDesc {
+                image: tgpu::ImageDesc {
+                    label: Some(tgpu::Label::Name("present image")),
+                    format: self.swapchain.format(),
+                    extent: vk::Extent3D {
+                        width: self.swapchain.extent().width,
+                        height: self.swapchain.extent().height,
+                        depth: 1,
+                    },
+                    usage: tgpu::ImageUses::COPY_SRC
+                        | tgpu::ImageUses::COPY_DST
+                        | tgpu::ImageUses::STORAGE
+                        | tgpu::ImageUses::COLOR_ATTACHMENT
+                        | tgpu::ImageUses::SAMPLED,
+                    ..Default::default()
+                },
                 sampler: Some(tgpu::SamplerCreateInfo {
                     label: Some(tgpu::Label::Name("Present Sampler")),
                     ..Default::default()

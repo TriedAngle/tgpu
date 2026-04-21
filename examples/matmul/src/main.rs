@@ -63,31 +63,31 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     let queue = queues.next().unwrap();
 
-    let usage_rw_host = tgpu::BufferUsage::STORAGE
-        | tgpu::BufferUsage::DEVICE
-        | tgpu::BufferUsage::COHERENT
-        | tgpu::BufferUsage::HOST_VISIBLE
-        | tgpu::BufferUsage::MAP_WRITE
-        | tgpu::BufferUsage::MAP_READ;
+    let storage_buffer = tgpu::BufferDesc {
+        usage: tgpu::BufferUses::STORAGE,
+        memory: tgpu::MemoryPreset::Dynamic,
+        host_access: tgpu::HostAccess::ReadWriteRandom,
+        ..Default::default()
+    };
 
-    let buf_a = device.create_buffer(&tgpu::BufferInfo {
+    let buf_a = device.create_buffer(&tgpu::BufferDesc {
         label: Some(tgpu::Label::Name("A")),
         size: std::mem::size_of::<f32>() * len_a,
-        usage: usage_rw_host,
+        ..storage_buffer.clone()
     })?;
-    let buf_b = device.create_buffer(&tgpu::BufferInfo {
+    let buf_b = device.create_buffer(&tgpu::BufferDesc {
         label: Some(tgpu::Label::Name("B")),
         size: std::mem::size_of::<f32>() * len_b,
-        usage: usage_rw_host,
+        ..storage_buffer.clone()
     })?;
-    let buf_c = device.create_buffer(&tgpu::BufferInfo {
+    let buf_c = device.create_buffer(&tgpu::BufferDesc {
         label: Some(tgpu::Label::Name("C")),
         size: std::mem::size_of::<f32>() * len_c,
-        usage: usage_rw_host,
+        ..storage_buffer
     })?;
 
-    buf_a.write(bytemuck::cast_slice(&host_a), 0);
-    buf_b.write(bytemuck::cast_slice(&host_b_t), 0);
+    buf_a.write_slice(&host_a);
+    buf_b.write_slice(&host_b_t);
 
     let bindless = device.create_bindless_heap(&tgpu::BindlessInfo {
         max_read_buffers: 2,
@@ -137,8 +137,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     device.wait_idle();
 
     let mut host_c = vec![0.0f32; len_c];
-    let bytes_c = std::mem::size_of::<f32>() * len_c;
-    buf_c.read(bytemuck::cast_slice_mut(&mut host_c), 0, bytes_c);
+    buf_c.read_slice(&mut host_c);
 
     // Tiny correctness spot-check against CPU on a few random entries
     let mut max_abs_err = 0.0f32;

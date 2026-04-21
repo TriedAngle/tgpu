@@ -86,12 +86,13 @@ impl Render {
         let size = window.inner_size();
 
         // TODO: use this buffer
-        let buffer = device.create_buffer(&tgpu::BufferInfo {
+        let buffer = device.create_buffer(&tgpu::BufferDesc {
             label: Some(tgpu::Label::Name("test")),
             size: 420,
-            usage: tgpu::BufferUsage::COPY_DST
-                | tgpu::BufferUsage::MAP_WRITE
-                | tgpu::BufferUsage::DEVICE,
+            usage: tgpu::BufferUses::COPY_DST,
+            memory: tgpu::MemoryPreset::Dynamic,
+            host_access: tgpu::HostAccess::WriteSequential,
+            ..Default::default()
         })?;
 
         let swapchain = device.create_swapchain(&tgpu::SwapchainCreateInfo {

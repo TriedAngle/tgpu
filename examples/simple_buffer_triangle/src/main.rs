@@ -122,16 +122,15 @@ impl Render {
             },
         ];
 
-        let vertex_buffer = device.create_buffer(&tgpu::BufferInfo {
+        let vertex_buffer = device.create_buffer(&tgpu::BufferDesc {
             label: Some(tgpu::Label::Name("triangle vertices")),
             size: std::mem::size_of_val(&vertices),
-            usage: tgpu::BufferUsage::STORAGE
-                | tgpu::BufferUsage::MAP_WRITE
-                | tgpu::BufferUsage::DEVICE
-                | tgpu::BufferUsage::HOST_VISIBLE
-                | tgpu::BufferUsage::COHERENT,
+            usage: tgpu::BufferUses::STORAGE,
+            memory: tgpu::MemoryPreset::Dynamic,
+            host_access: tgpu::HostAccess::WriteSequential,
+            ..Default::default()
         })?;
-        vertex_buffer.write(bytemuck::cast_slice(&vertices), 0);
+        vertex_buffer.write_slice(&vertices);
 
         let bindless = device.create_bindless_heap(&tgpu::BindlessInfo {
             max_read_buffers: 1,

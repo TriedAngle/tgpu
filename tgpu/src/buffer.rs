@@ -18,7 +18,7 @@ bitflags::bitflags! {
 
 bitflags::bitflags! {
     #[derive(Debug, Clone, Copy)]
-    pub struct BufferUsage: u32 {
+    pub(crate) struct BufferUsage: u32 {
         const MAP_READ = 1 << 0;
         const MAP_WRITE = 1 << 1;
         const COPY_SRC = 1 << 2;
@@ -146,7 +146,7 @@ impl Default for BufferDesc<'_> {
 }
 
 #[derive(Debug, Default)]
-pub struct BufferInfo<'a> {
+pub(crate) struct BufferInfo<'a> {
     pub size: usize,
     pub usage: BufferUsage,
     pub label: Option<Label<'a>>,
@@ -155,32 +155,22 @@ pub struct BufferInfo<'a> {
 #[derive(Debug)]
 pub struct BufferImpl {
     pub handle: vk::Buffer,
-    pub allocation: UnsafeCell<vkm::Allocation>,
-    pub size: usize,
-    pub usage: BufferUsage,
-    pub device: RawDevice,
+    pub(crate) allocation: UnsafeCell<vkm::Allocation>,
+    pub(crate) usage: BufferUsage,
+    pub(crate) device: RawDevice,
 }
 
 #[derive(Debug, Clone)]
 pub struct Buffer {
     pub inner: Arc<BufferImpl>,
     pub size: usize,
-    pub usage: BufferUsage,
+    pub uses: BufferUses,
+    pub memory: MemoryPreset,
+    pub host_access: HostAccess,
 }
 
 impl Device {
-    pub fn create_buffer(&self, info: &BufferInfo<'_>) -> Result<Buffer, GPUError> {
-        let (size, usage) = (info.size, info.usage);
-        let inner = BufferImpl::new(self.inner.clone(), info)?;
-        let buffer = Buffer {
-            inner: Arc::new(inner),
-            size,
-            usage,
-        };
-        Ok(buffer)
-    }
-
-    pub fn create_buffer_with(&self, desc: &BufferDesc<'_>) -> Result<Buffer, GPUError> {
+    pub fn create_buffer(&self, desc: &BufferDesc<'_>) -> Result<Buffer, GPUError> {
         if desc.size == 0 {
             return Err(GPUError::Validation(
                 "buffer size must be greater than zero",
@@ -247,8 +237,14 @@ impl Device {
         Ok(Buffer {
             inner: Arc::new(inner),
             size: info.size,
-            usage: info.usage,
+            uses: desc.usage,
+            memory: desc.memory,
+            host_access,
         })
+    }
+
+    pub fn create_buffer_with(&self, desc: &BufferDesc<'_>) -> Result<Buffer, GPUError> {
+        self.create_buffer(desc)
     }
 }
 
@@ -359,18 +355,7 @@ fn allocation_create_info(
 }
 
 impl BufferImpl {
-    pub fn new(device: RawDevice, info: &BufferInfo<'_>) -> Result<BufferImpl, GPUError> {
-        let create_info = vkm::AllocationCreateInfo {
-            usage: info.usage.into(),
-            flags: info.usage.into(),
-            required_flags: info.usage.into(),
-            ..Default::default()
-        };
-
-        Self::new_with_allocation(device, info, create_info)
-    }
-
-    pub fn new_with_allocation(
+    pub(crate) fn new_with_allocation(
         device: RawDevice,
         info: &BufferInfo<'_>,
         create_info: vkm::AllocationCreateInfo,
@@ -396,7 +381,6 @@ impl BufferImpl {
         Ok(BufferImpl {
             handle,
             allocation: UnsafeCell::new(allocation),
-            size: info.size,
             usage: info.usage,
             device,
         })

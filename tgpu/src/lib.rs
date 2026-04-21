@@ -46,7 +46,7 @@ pub use bindless::{
     BINDLESS_SAMPLER_BINDING, BINDLESS_STORAGE_IMAGE_BINDING, BindlessHeap, BindlessInfo,
     ReadBufferHandle, RwBufferHandle, SampledImageHandle, SamplerHandle, StorageImageHandle,
 };
-pub use buffer::{Buffer, BufferDesc, BufferInfo, BufferUsage, BufferUses};
+pub use buffer::{Buffer, BufferDesc, BufferUses};
 pub use command::{
     CommandBuffer, CommandPools, CommandRecorder, RenderInfo, SubmitInfo, ThreadCommandPool,
 };
@@ -57,9 +57,9 @@ pub use descriptor::{
 };
 pub use device::{Device, DeviceCreateInfo};
 pub use image::{
-    BlitImageInfo, CopyImageInfo, Image, ImageCreateInfo, ImageLayout, ImageLayoutTransition,
-    ImageTransition, ImageUsage, ImageView, ImageViewCreateInfo, ImageViewOptions, Sampler,
-    SamplerCreateInfo, Texture2DDesc, TextureUses, ViewImage, ViewImageCreateInfo,
+    BlitImageInfo, CopyImageInfo, Image, ImageDesc, ImageFlags, ImageLayout, ImageLayoutTransition,
+    ImageTransition, ImageUses, ImageView, ImageViewCreateInfo, ImageViewOptions, Sampler,
+    SamplerCreateInfo, Texture2DDesc, TextureUses, ViewImage, ViewImageDesc,
 };
 pub use instance::{Instance, InstanceCreateInfo};
 pub use pipeline::{ComputePipeline, ComputePipelineInfo, RenderPipeline, RenderPipelineInfo};

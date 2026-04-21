@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     mem::ManuallyDrop,
-    sync::{atomic::AtomicU64, Arc},
+    sync::{Arc, atomic::AtomicU64},
     time::Duration,
 };
 
@@ -9,9 +9,9 @@ use ash::vk;
 use parking_lot::Mutex;
 
 use crate::{
-    raw::{QueueImpl, RawAdapter, RawInstance, SemaphoreImpl},
     Adapter, CommandPools, GPUError, Instance, Label, Queue, QueueFamilyInfo, QueueRequest,
     Semaphore,
+    raw::{QueueImpl, RawAdapter, RawInstance, SemaphoreImpl},
 };
 
 #[derive(Debug)]

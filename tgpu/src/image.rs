@@ -3,12 +3,12 @@ use std::{fmt, ops, sync::Arc};
 use ash::vk;
 use vkm::Alloc;
 
-use crate::{Allocation, Device, GPUError, Label, MemoryPreset, Queue, raw::RawDevice};
+use crate::{Allocation, Device, GPUError, HostAccess, Label, MemoryPreset, Queue, raw::RawDevice};
 
 // TODO: support custom stuff
 bitflags::bitflags! {
     #[derive(Debug, Clone, Copy, Default)]
-    pub struct ImageUsage: u32 {
+    pub(crate) struct ImageUsage: u32 {
         const MAP_READ = 1 << 0;
         const MAP_WRITE = 1 << 1;
         const COPY_SRC = 1 << 2;
@@ -156,6 +156,87 @@ bitflags::bitflags! {
     }
 }
 
+pub type ImageUses = TextureUses;
+
+bitflags::bitflags! {
+    #[derive(Debug, Clone, Copy, Default)]
+    pub struct ImageFlags: u32 {
+        const SPARSE_BINDING = 1 << 0;
+        const SPARSE_RESIDENCY = 1 << 1;
+        const SPARSE_ALIASED = 1 << 2;
+        const MUTABLE_FORMAT = 1 << 3;
+        const CUBE = 1 << 4;
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ImageDesc<'a> {
+    pub format: vk::Format,
+    pub ty: vk::ImageType,
+    pub extent: vk::Extent3D,
+    pub mip_levels: u32,
+    pub array_layers: u32,
+    pub tiling: vk::ImageTiling,
+    pub samples: vk::SampleCountFlags,
+    pub usage: ImageUses,
+    pub flags: ImageFlags,
+    pub memory: MemoryPreset,
+    pub host_access: HostAccess,
+    pub sharing: vk::SharingMode,
+    pub initial_layout: ImageLayout,
+    pub label: Option<Label<'a>>,
+}
+
+impl Default for ImageDesc<'_> {
+    fn default() -> Self {
+        Self {
+            format: vk::Format::UNDEFINED,
+            ty: vk::ImageType::TYPE_2D,
+            extent: vk::Extent3D::default(),
+            mip_levels: 1,
+            array_layers: 1,
+            tiling: vk::ImageTiling::OPTIMAL,
+            samples: vk::SampleCountFlags::TYPE_1,
+            usage: ImageUses::empty(),
+            flags: ImageFlags::empty(),
+            memory: MemoryPreset::GpuOnly,
+            host_access: HostAccess::None,
+            sharing: vk::SharingMode::EXCLUSIVE,
+            initial_layout: ImageLayout::Undefined,
+            label: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct ViewImageDesc<'a> {
+    pub image: ImageDesc<'a>,
+    pub sampler: Option<SamplerCreateInfo<'a>>,
+    pub view_type: Option<vk::ImageViewType>,
+    pub view_format: Option<vk::Format>,
+    pub aspect: Option<vk::ImageAspectFlags>,
+    pub swizzle: vk::ComponentMapping,
+    pub view_mips: Option<ops::Range<u32>>,
+    pub view_layers: Option<ops::Range<u32>>,
+    pub view_label: Option<Label<'a>>,
+}
+
+impl Default for ViewImageDesc<'_> {
+    fn default() -> Self {
+        Self {
+            image: ImageDesc::default(),
+            sampler: None,
+            view_type: None,
+            view_format: None,
+            aspect: None,
+            swizzle: vk::ComponentMapping::default(),
+            view_mips: None,
+            view_layers: None,
+            view_label: None,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct Texture2DDesc<'a> {
     pub size: [u32; 2],
@@ -217,6 +298,28 @@ impl From<TextureUses> for ImageUsage {
         }
         if usage.contains(TextureUses::TRANSIENT_ATTACHMENT) {
             raw |= ImageUsage::TRANSIENT;
+        }
+        raw
+    }
+}
+
+impl From<ImageFlags> for vk::ImageCreateFlags {
+    fn from(flags: ImageFlags) -> Self {
+        let mut raw = vk::ImageCreateFlags::empty();
+        if flags.contains(ImageFlags::SPARSE_BINDING) {
+            raw |= vk::ImageCreateFlags::SPARSE_BINDING;
+        }
+        if flags.contains(ImageFlags::SPARSE_RESIDENCY) {
+            raw |= vk::ImageCreateFlags::SPARSE_RESIDENCY;
+        }
+        if flags.contains(ImageFlags::SPARSE_ALIASED) {
+            raw |= vk::ImageCreateFlags::SPARSE_ALIASED;
+        }
+        if flags.contains(ImageFlags::MUTABLE_FORMAT) {
+            raw |= vk::ImageCreateFlags::MUTABLE_FORMAT;
+        }
+        if flags.contains(ImageFlags::CUBE) {
+            raw |= vk::ImageCreateFlags::CUBE_COMPATIBLE;
         }
         raw
     }
@@ -295,8 +398,162 @@ fn validate_texture_2d_desc(desc: &Texture2DDesc<'_>) -> Result<(), GPUError> {
     Ok(())
 }
 
-fn infer_texture_aspect(format: vk::Format, usage: TextureUses) -> vk::ImageAspectFlags {
-    if usage.contains(TextureUses::DEPTH_STENCIL_ATTACHMENT) {
+fn validate_image_desc(desc: &ImageDesc<'_>) -> Result<(), GPUError> {
+    if desc.format == vk::Format::UNDEFINED {
+        return Err(GPUError::Validation("image format must be defined"));
+    }
+    if desc.extent.width == 0 || desc.extent.height == 0 || desc.extent.depth == 0 {
+        return Err(GPUError::Validation(
+            "image extent components must be greater than zero",
+        ));
+    }
+    if desc.mip_levels == 0 {
+        return Err(GPUError::Validation(
+            "image mip_levels must be greater than zero",
+        ));
+    }
+    if desc.array_layers == 0 {
+        return Err(GPUError::Validation(
+            "image array_layers must be greater than zero",
+        ));
+    }
+    if desc.usage.is_empty() {
+        return Err(GPUError::Validation("image usage must not be empty"));
+    }
+
+    match desc.ty {
+        vk::ImageType::TYPE_1D => {
+            if desc.extent.height != 1 || desc.extent.depth != 1 {
+                return Err(GPUError::Validation(
+                    "1D images require extent.height = 1 and extent.depth = 1",
+                ));
+            }
+        }
+        vk::ImageType::TYPE_2D => {
+            if desc.extent.depth != 1 {
+                return Err(GPUError::Validation("2D images require extent.depth = 1"));
+            }
+        }
+        vk::ImageType::TYPE_3D => {
+            if desc.array_layers != 1 {
+                return Err(GPUError::Validation("3D images require array_layers = 1"));
+            }
+        }
+        _ => {}
+    }
+
+    if desc.usage.contains(ImageUses::TRANSIENT_ATTACHMENT) {
+        let attachment_usage = ImageUses::COLOR_ATTACHMENT
+            | ImageUses::DEPTH_STENCIL_ATTACHMENT
+            | ImageUses::INPUT_ATTACHMENT;
+
+        if !desc.usage.intersects(attachment_usage) {
+            return Err(GPUError::Validation(
+                "TRANSIENT_ATTACHMENT requires COLOR_ATTACHMENT, DEPTH_STENCIL_ATTACHMENT, or INPUT_ATTACHMENT",
+            ));
+        }
+
+        let disallowed_usage =
+            ImageUses::COPY_SRC | ImageUses::COPY_DST | ImageUses::SAMPLED | ImageUses::STORAGE;
+        if desc.usage.intersects(disallowed_usage) {
+            return Err(GPUError::Validation(
+                "TRANSIENT_ATTACHMENT cannot be combined with COPY_SRC, COPY_DST, SAMPLED, or STORAGE",
+            ));
+        }
+    }
+
+    if desc.memory == MemoryPreset::TransientAttachment
+        && !desc.usage.contains(ImageUses::TRANSIENT_ATTACHMENT)
+    {
+        return Err(GPUError::Validation(
+            "TransientAttachment memory requires TRANSIENT_ATTACHMENT usage",
+        ));
+    }
+
+    if desc
+        .flags
+        .intersects(ImageFlags::SPARSE_RESIDENCY | ImageFlags::SPARSE_ALIASED)
+        && !desc.flags.contains(ImageFlags::SPARSE_BINDING)
+    {
+        return Err(GPUError::Validation(
+            "SPARSE_RESIDENCY and SPARSE_ALIASED require SPARSE_BINDING",
+        ));
+    }
+
+    if desc.flags.contains(ImageFlags::CUBE) {
+        if desc.ty != vk::ImageType::TYPE_2D {
+            return Err(GPUError::Validation(
+                "CUBE images require image type TYPE_2D",
+            ));
+        }
+        if desc.extent.width != desc.extent.height {
+            return Err(GPUError::Validation(
+                "CUBE images require square width and height",
+            ));
+        }
+        if desc.array_layers < 6 {
+            return Err(GPUError::Validation(
+                "CUBE images require at least 6 array layers",
+            ));
+        }
+    }
+
+    if desc.samples != vk::SampleCountFlags::TYPE_1 {
+        if desc.ty != vk::ImageType::TYPE_2D {
+            return Err(GPUError::Validation(
+                "multisampled images must use image type TYPE_2D",
+            ));
+        }
+        if desc.mip_levels != 1 {
+            return Err(GPUError::Validation(
+                "multisampled images must use mip_levels = 1",
+            ));
+        }
+        if desc.flags.contains(ImageFlags::CUBE) {
+            return Err(GPUError::Validation(
+                "multisampled images cannot use CUBE compatibility",
+            ));
+        }
+        if desc.tiling == vk::ImageTiling::LINEAR {
+            return Err(GPUError::Validation(
+                "multisampled images cannot use linear tiling",
+            ));
+        }
+    }
+
+    if desc.memory == MemoryPreset::GpuOnly && desc.host_access != HostAccess::None {
+        return Err(GPUError::Validation(
+            "GpuOnly images cannot request host access; use Upload, Readback, or Dynamic",
+        ));
+    }
+
+    Ok(())
+}
+
+fn validate_view_image_desc(desc: &ViewImageDesc<'_>) -> Result<(), GPUError> {
+    validate_image_desc(&desc.image)?;
+
+    if let Some(mips) = &desc.view_mips {
+        if mips.start >= mips.end || mips.end > desc.image.mip_levels {
+            return Err(GPUError::Validation(
+                "view_mips must be a non-empty range within image mip_levels",
+            ));
+        }
+    }
+
+    if let Some(layers) = &desc.view_layers {
+        if layers.start >= layers.end || layers.end > desc.image.array_layers {
+            return Err(GPUError::Validation(
+                "view_layers must be a non-empty range within image array_layers",
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn infer_image_aspect(format: vk::Format, usage: ImageUses) -> vk::ImageAspectFlags {
+    if usage.contains(ImageUses::DEPTH_STENCIL_ATTACHMENT) {
         return depth_stencil_aspect(format);
     }
 
@@ -306,6 +563,24 @@ fn infer_texture_aspect(format: vk::Format, usage: TextureUses) -> vk::ImageAspe
     }
 
     vk::ImageAspectFlags::COLOR
+}
+
+fn infer_image_view_type(desc: &ImageDesc<'_>) -> vk::ImageViewType {
+    if desc.flags.contains(ImageFlags::CUBE) {
+        if desc.array_layers > 6 {
+            return vk::ImageViewType::CUBE_ARRAY;
+        }
+        return vk::ImageViewType::CUBE;
+    }
+
+    match desc.ty {
+        vk::ImageType::TYPE_1D if desc.array_layers > 1 => vk::ImageViewType::TYPE_1D_ARRAY,
+        vk::ImageType::TYPE_1D => vk::ImageViewType::TYPE_1D,
+        vk::ImageType::TYPE_2D if desc.array_layers > 1 => vk::ImageViewType::TYPE_2D_ARRAY,
+        vk::ImageType::TYPE_2D => vk::ImageViewType::TYPE_2D,
+        vk::ImageType::TYPE_3D => vk::ImageViewType::TYPE_3D,
+        _ => vk::ImageViewType::TYPE_2D,
+    }
 }
 
 fn depth_stencil_aspect(format: vk::Format) -> vk::ImageAspectFlags {
@@ -419,7 +694,7 @@ pub struct ImageViewCreateInfo<'a> {
 }
 
 #[derive(Debug, Default)]
-pub struct ImageCreateInfo<'a> {
+pub(crate) struct ImageCreateInfo<'a> {
     pub format: vk::Format,
     pub ty: vk::ImageType,
     pub volume: vk::Extent3D,
@@ -428,16 +703,10 @@ pub struct ImageCreateInfo<'a> {
     pub tiling: vk::ImageTiling,
     pub samples: vk::SampleCountFlags,
     pub usage: ImageUsage,
+    pub flags: vk::ImageCreateFlags,
     pub sharing: vk::SharingMode,
     pub layout: ImageLayout,
     pub label: Option<Label<'a>>,
-}
-
-#[derive(Debug)]
-pub struct ViewImageCreateInfo<'a> {
-    pub image: &'a ImageCreateInfo<'a>,
-    pub sampler: Option<&'a SamplerCreateInfo<'a>>,
-    pub view: ImageViewOptions<'a>,
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -522,7 +791,11 @@ impl ImageViewImpl {
 }
 
 impl ImageImpl {
-    pub unsafe fn new(device: RawDevice, info: &ImageCreateInfo<'_>) -> Result<Self, GPUError> {
+    pub(crate) unsafe fn new_with_allocation(
+        device: RawDevice,
+        info: &ImageCreateInfo<'_>,
+        create_info: vkm::AllocationCreateInfo,
+    ) -> Result<Self, GPUError> {
         let image_info = vk::ImageCreateInfo::default()
             .image_type(info.ty)
             .format(info.format)
@@ -534,14 +807,7 @@ impl ImageImpl {
             .usage(info.usage.into())
             .sharing_mode(info.sharing)
             .initial_layout(info.layout.into())
-            .flags(info.usage.into());
-
-        let create_info = vkm::AllocationCreateInfo {
-            usage: info.usage.into(),
-            flags: info.usage.into(),
-            required_flags: info.usage.into(),
-            ..Default::default()
-        };
+            .flags(info.flags | vk::ImageCreateFlags::from(info.usage));
 
         let (handle, allocation) =
             unsafe { device.allocator.create_image(&image_info, &create_info) }?;
@@ -560,6 +826,39 @@ impl ImageImpl {
             device,
             allocation,
         })
+    }
+}
+
+fn allocation_create_info(
+    memory: MemoryPreset,
+    host_access: HostAccess,
+) -> vkm::AllocationCreateInfo {
+    let usage = match memory {
+        MemoryPreset::GpuOnly => vkm::MemoryUsage::AutoPreferDevice,
+        MemoryPreset::Upload | MemoryPreset::Readback => vkm::MemoryUsage::AutoPreferHost,
+        MemoryPreset::Dynamic => vkm::MemoryUsage::AutoPreferDevice,
+        MemoryPreset::TransientAttachment => vkm::MemoryUsage::GpuLazy,
+    };
+
+    let mut flags = vkm::AllocationCreateFlags::empty();
+    let mut preferred_flags = vk::MemoryPropertyFlags::empty();
+
+    match host_access {
+        HostAccess::None => {}
+        HostAccess::WriteSequential => {
+            flags |= vkm::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE;
+        }
+        HostAccess::ReadRandom | HostAccess::ReadWriteRandom => {
+            flags |= vkm::AllocationCreateFlags::HOST_ACCESS_RANDOM;
+            preferred_flags |= vk::MemoryPropertyFlags::HOST_CACHED;
+        }
+    }
+
+    vkm::AllocationCreateInfo {
+        usage,
+        flags,
+        preferred_flags,
+        ..Default::default()
     }
 }
 
@@ -588,42 +887,73 @@ impl Device {
         self.try_create_image_view(info).expect("Create Image View")
     }
 
-    pub fn try_create_image(&self, info: &ImageCreateInfo<'_>) -> Result<Image, GPUError> {
-        let inner = unsafe { ImageImpl::new(self.inner.clone(), info)? };
+    pub fn create_image(&self, desc: &ImageDesc<'_>) -> Result<Image, GPUError> {
+        validate_image_desc(desc)?;
+
+        let info = ImageCreateInfo {
+            format: desc.format,
+            ty: desc.ty,
+            volume: desc.extent,
+            mips: desc.mip_levels,
+            layers: desc.array_layers,
+            tiling: desc.tiling,
+            samples: desc.samples,
+            usage: ImageUsage::from(desc.usage),
+            flags: desc.flags.into(),
+            sharing: desc.sharing,
+            layout: desc.initial_layout,
+            label: desc.label.clone(),
+        };
+
+        let inner = unsafe {
+            ImageImpl::new_with_allocation(
+                self.inner.clone(),
+                &info,
+                allocation_create_info(desc.memory, desc.host_access),
+            )?
+        };
+
         Ok(Image {
             inner: Arc::new(inner),
             format: info.format,
         })
     }
 
-    pub fn create_image(&self, info: &ImageCreateInfo<'_>) -> Image {
-        self.try_create_image(info).expect("Create Image")
+    pub fn create_image_with(&self, desc: &ImageDesc<'_>) -> Result<Image, GPUError> {
+        self.create_image(desc)
     }
 
-    pub fn try_create_sampled_image(
-        &self,
-        info: &ViewImageCreateInfo<'_>,
-    ) -> Result<ViewImage, GPUError> {
-        let ViewImageCreateInfo {
-            image: image_info,
-            view: image_view_options,
-            sampler: sampler_info,
-        } = info;
+    pub fn create_view_image(&self, desc: &ViewImageDesc<'_>) -> Result<ViewImage, GPUError> {
+        validate_view_image_desc(desc)?;
 
-        let image = self.try_create_image(image_info)?;
+        let image = self.create_image(&desc.image)?;
 
-        let mut image_view_info = ImageViewCreateInfo {
-            image: &image,
-            options: image_view_options.clone(),
+        let sampler = if let Some(sampler_desc) = desc.sampler.as_ref() {
+            Some(self.try_create_sampler(sampler_desc)?)
+        } else {
+            None
         };
 
-        let mut sampler = None;
-        if let Some(sampler_info) = sampler_info {
-            sampler = Some(self.try_create_sampler(sampler_info)?);
-            image_view_info.options.sampler = sampler.as_ref();
-        }
-
-        let view = self.try_create_image_view(&image_view_info)?;
+        let view = self.try_create_image_view(&ImageViewCreateInfo {
+            image: &image,
+            options: ImageViewOptions {
+                sampler: sampler.as_ref(),
+                ty: desc
+                    .view_type
+                    .unwrap_or_else(|| infer_image_view_type(&desc.image)),
+                format: desc.view_format,
+                aspect: desc
+                    .aspect
+                    .unwrap_or_else(|| infer_image_aspect(desc.image.format, desc.image.usage)),
+                swizzle: desc.swizzle,
+                mips: desc.view_mips.clone().unwrap_or(0..desc.image.mip_levels),
+                layers: desc
+                    .view_layers
+                    .clone()
+                    .unwrap_or(0..desc.image.array_layers),
+                label: desc.view_label.clone(),
+            },
+        })?;
 
         Ok(ViewImage {
             image,
@@ -632,58 +962,53 @@ impl Device {
         })
     }
 
-    pub fn create_sampled_image(&self, info: &ViewImageCreateInfo<'_>) -> ViewImage {
-        self.try_create_sampled_image(info)
-            .expect("Create Sampled Image")
+    pub fn create_view_image_with(&self, desc: &ViewImageDesc<'_>) -> Result<ViewImage, GPUError> {
+        self.create_view_image(desc)
     }
 
     pub fn create_texture_2d(&self, desc: &Texture2DDesc<'_>) -> Result<ViewImage, GPUError> {
         validate_texture_2d_desc(desc)?;
 
-        let mut usage = ImageUsage::from(desc.usage);
-        if desc.sampler.is_some() {
-            usage |= ImageUsage::SAMPLED;
+        if matches!(
+            desc.memory,
+            MemoryPreset::Upload | MemoryPreset::Readback | MemoryPreset::Dynamic
+        ) {
+            return Err(GPUError::Validation(
+                "Texture2DDesc only supports GpuOnly or TransientAttachment memory; use ImageDesc for explicit image allocation",
+            ));
         }
 
-        usage |= match desc.memory {
-            MemoryPreset::GpuOnly => ImageUsage::DEVICE,
-            MemoryPreset::TransientAttachment => ImageUsage::LAZY,
-            MemoryPreset::Upload | MemoryPreset::Readback | MemoryPreset::Dynamic => {
-                return Err(GPUError::Validation(
-                    "Texture2DDesc only supports GpuOnly or TransientAttachment memory; use create_image for explicit image allocation",
-                ));
-            }
-        };
+        let mut usage = desc.usage;
+        if desc.sampler.is_some() {
+            usage |= TextureUses::SAMPLED;
+        }
 
-        self.try_create_sampled_image(&ViewImageCreateInfo {
-            image: &ImageCreateInfo {
+        self.create_view_image(&ViewImageDesc {
+            image: ImageDesc {
                 format: desc.format,
                 ty: vk::ImageType::TYPE_2D,
-                volume: vk::Extent3D {
+                extent: vk::Extent3D {
                     width: desc.size[0],
                     height: desc.size[1],
                     depth: 1,
                 },
-                mips: desc.mip_levels,
-                layers: desc.array_layers,
+                mip_levels: desc.mip_levels,
+                array_layers: desc.array_layers,
                 tiling: desc.tiling,
                 samples: desc.samples,
                 usage,
-                sharing: vk::SharingMode::EXCLUSIVE,
-                layout: ImageLayout::Undefined,
+                memory: desc.memory,
                 label: desc.label.clone(),
+                ..Default::default()
             },
-            sampler: desc.sampler.as_ref(),
-            view: ImageViewOptions {
-                sampler: None,
-                ty: vk::ImageViewType::TYPE_2D,
-                format: desc.view_format,
-                aspect: infer_texture_aspect(desc.format, desc.usage),
-                swizzle: vk::ComponentMapping::default(),
-                mips: 0..desc.mip_levels,
-                layers: 0..desc.array_layers,
-                label: desc.view_label.clone(),
-            },
+            sampler: desc.sampler.clone(),
+            view_type: None,
+            view_format: desc.view_format,
+            aspect: Some(infer_image_aspect(desc.format, usage)),
+            view_mips: Some(0..desc.mip_levels),
+            view_layers: Some(0..desc.array_layers),
+            view_label: desc.view_label.clone(),
+            ..Default::default()
         })
     }
 }
