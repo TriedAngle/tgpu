@@ -68,7 +68,7 @@ impl InstanceImpl {
 
         let adapters = pdevs
             .into_iter()
-            .map(|physical_device| unsafe { AdapterImpl::new(&self, physical_device, formats) })
+            .map(|physical_device| unsafe { AdapterImpl::new(self, physical_device, formats) })
             .collect::<Vec<_>>();
 
         Ok(adapters)

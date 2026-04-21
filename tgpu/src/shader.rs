@@ -16,7 +16,7 @@ pub struct Shader {
 }
 
 pub struct ShaderEntry<'a> {
-    pub shader: &'a Shader,
+    pub shader: Option<&'a Shader>,
     pub name: &'a str,
 }
 
@@ -27,11 +27,9 @@ pub struct ShaderModule {
 
 impl<'a> ShaderEntry<'a> {
     pub fn null() -> Self {
-        unsafe {
-            Self {
-                shader: std::mem::transmute(std::ptr::null::<Shader>()),
-                name: "",
-            }
+        Self {
+            shader: None,
+            name: "",
         }
     }
 }
@@ -39,7 +37,7 @@ impl<'a> ShaderEntry<'a> {
 impl Shader {
     pub fn entry<'a>(&'a self, name: &'a str) -> ShaderEntry<'a> {
         ShaderEntry {
-            shader: &self,
+            shader: Some(self),
             name,
         }
     }
@@ -241,6 +239,7 @@ mod tests {
     //
     //     }
 
+    #[allow(dead_code)]
     const WGSL_TRIANGLE: &str = r#"
 const positions = array<vec2f, 3>(
   vec2f(0.0, -0.5),
@@ -273,6 +272,7 @@ fn fmain(input: VertexOutput) -> @location(0) vec4f {
 }
         "#;
 
+    #[allow(dead_code)]
     fn device() -> (crate::Device, crate::Queue) {
         let instance = crate::Instance::new(&crate::InstanceCreateInfo {
             app_name: "Triangle",

@@ -154,8 +154,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let tile: u32 = 16;
-    let groups_x = (n + tile - 1) / tile;
-    let groups_y = (m + tile - 1) / tile;
+    let groups_x = n.div_ceil(tile);
+    let groups_y = m.div_ceil(tile);
     let push = Push { m, n, k };
 
     let mut rec = queue.record();

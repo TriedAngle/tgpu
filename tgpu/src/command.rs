@@ -532,7 +532,7 @@ impl CommandRecorderImpl {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct SubmitInfo<'a> {
     pub records: &'a [CommandBuffer],
     pub wait_binary: &'a [(&'a Semaphore, vk::PipelineStageFlags)],
@@ -540,19 +540,6 @@ pub struct SubmitInfo<'a> {
     pub signal_binary: &'a [&'a Semaphore],
     pub signal_timeline: &'a [(&'a Semaphore, u64)],
     pub fence: Option<vk::Fence>,
-}
-
-impl Default for SubmitInfo<'_> {
-    fn default() -> Self {
-        Self {
-            records: &[],
-            wait_binary: &[],
-            wait_timeline: &[],
-            signal_binary: &[],
-            signal_timeline: &[],
-            fence: None,
-        }
-    }
 }
 
 impl Queue {
@@ -576,10 +563,9 @@ impl Queue {
             device: pool.device.clone(),
         };
 
-        let recorder = CommandRecorder {
+        CommandRecorder {
             inner: Rc::new(UnsafeCell::new(inner)),
-        };
-        recorder
+        }
     }
 
     // TODO: we can merge here already, do that maybe
@@ -840,7 +826,7 @@ impl Drop for CommandRecorderImpl {
 
 impl Drop for CommandPools {
     fn drop(&mut self) {
-        for (_thread, pool) in self.pools.get_mut() {
+        for pool in self.pools.get_mut().values_mut() {
             unsafe { self.device.wait_idle() };
 
             let ready = pool.ready.borrow();

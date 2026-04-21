@@ -284,7 +284,7 @@ impl SwapchainImpl {
 
     fn create_image_views(
         device: RawDevice,
-        images: &Vec<Image>,
+        images: &[Image],
         format: vk::SurfaceFormatKHR,
     ) -> Vec<ImageView> {
         images
@@ -313,15 +313,14 @@ impl SwapchainImpl {
                     .create_image_view(&info, None)
                     .expect("Create Image View");
 
-                let image_view = ImageView {
+                ImageView {
                     sampler: None,
                     inner: ImageViewImpl {
                         handle,
                         device: device.clone(),
                         image: img.inner.clone(),
                     },
-                };
-                image_view
+                }
             })
             .collect()
     }

@@ -109,21 +109,27 @@ impl RenderPipelineImpl {
 
         let vertex_stage_name = std::ffi::CString::new(info.vertex_shader.name).unwrap();
         let fragment_stage_name = std::ffi::CString::new(info.fragment_shader.name).unwrap();
+        let vertex_shader = info
+            .vertex_shader
+            .shader
+            .expect("RenderPipelineInfo::vertex_shader must be set");
+        let fragment_shader = info
+            .fragment_shader
+            .shader
+            .expect("RenderPipelineInfo::fragment_shader must be set");
 
         let stages = [
             vk::PipelineShaderStageCreateInfo::default()
                 .stage(vk::ShaderStageFlags::VERTEX)
-                .module(info.vertex_shader.shader.module.handle)
+                .module(vertex_shader.module.handle)
                 .name(&vertex_stage_name),
             vk::PipelineShaderStageCreateInfo::default()
                 .stage(vk::ShaderStageFlags::FRAGMENT)
-                .module(info.fragment_shader.shader.module.handle)
+                .module(fragment_shader.module.handle)
                 .name(&fragment_stage_name),
         ];
 
-        let vertex_input = info
-            .vertex_input_state
-            .unwrap_or_else(|| vk::PipelineVertexInputStateCreateInfo::default());
+        let vertex_input = info.vertex_input_state.unwrap_or_default();
 
         let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
             .topology(info.topology)
@@ -154,7 +160,7 @@ impl RenderPipelineImpl {
                         .blend_enable(false),
                 ]
             },
-            |&states| states.iter().copied().collect::<Vec<_>>(),
+            |&states| states.to_vec(),
         );
 
         let color_blend = vk::PipelineColorBlendStateCreateInfo::default()
@@ -168,8 +174,8 @@ impl RenderPipelineImpl {
         let dynamic_state =
             vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
 
-        let mut rendering_info = vk::PipelineRenderingCreateInfo::default()
-            .color_attachment_formats(&info.color_formats);
+        let mut rendering_info =
+            vk::PipelineRenderingCreateInfo::default().color_attachment_formats(info.color_formats);
 
         if let Some(format) = info.depth_format {
             rendering_info = rendering_info.depth_attachment_format(format);
@@ -236,9 +242,13 @@ impl ComputePipelineImpl {
         };
 
         let stage_name = std::ffi::CString::new(info.shader.name).unwrap();
+        let shader = info
+            .shader
+            .shader
+            .expect("ComputePipelineInfo::shader must be set");
         let stage = vk::PipelineShaderStageCreateInfo::default()
             .stage(vk::ShaderStageFlags::COMPUTE)
-            .module(info.shader.shader.module.handle)
+            .module(shader.module.handle)
             .name(&stage_name);
 
         let create_info = vk::ComputePipelineCreateInfo::default()

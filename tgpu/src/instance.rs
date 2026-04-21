@@ -161,9 +161,9 @@ impl InstanceImpl {
         );
 
         let afo = vk::ApplicationInfo::default()
-            .application_name(&app_name)
+            .application_name(app_name)
             .application_version(vk::make_api_version(0, 0, 1, 0))
-            .engine_name(&engine_name)
+            .engine_name(engine_name)
             .engine_version(vk::make_api_version(0, 0, 1, 0))
             .api_version(vk::API_VERSION_1_3);
 
@@ -208,7 +208,7 @@ impl InstanceImpl {
                         "See: https://vulkan.lunarg.com/doc/sdk/latest/mac/getting_started.html"
                     );
                 }
-                return Err(e);
+                Err(e)
             }
         }
     }

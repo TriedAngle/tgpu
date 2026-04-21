@@ -89,52 +89,53 @@ impl QueueImpl {
 
         // Second pass: Try to fulfill remaining strict requests with shared queues
         for (idx, request) in queue_requests.iter().enumerate() {
-            if result[idx].is_none() && request.strict {
-                if let Some(info) = Self::find_best_queue_match(
+            if result[idx].is_none()
+                && request.strict
+                && let Some(info) = Self::find_best_queue_match(
                     &queue_families,
                     request,
                     false,
                     true,
                     &used_queues,
                     &used_family_indices,
-                ) {
-                    used_family_indices.insert(info.family_index);
-                    Self::update_used_queues(&mut used_queues, info.family_index, info.queue_index);
-                    shared_queues.push(info);
-                    result[idx] = Some(info);
-                }
+                )
+            {
+                used_family_indices.insert(info.family_index);
+                Self::update_used_queues(&mut used_queues, info.family_index, info.queue_index);
+                shared_queues.push(info);
+                result[idx] = Some(info);
             }
         }
 
         // Third pass: Try to fulfill non-strict requests
         for (idx, request) in queue_requests.iter().enumerate() {
-            if result[idx].is_none() {
-                if let Some(info) = Self::find_best_queue_match(
+            if result[idx].is_none()
+                && let Some(info) = Self::find_best_queue_match(
                     &queue_families,
                     request,
                     false,
                     false,
                     &used_queues,
                     &used_family_indices,
-                ) {
-                    used_family_indices.insert(info.family_index);
-                    Self::update_used_queues(&mut used_queues, info.family_index, info.queue_index);
-                    shared_queues.push(info);
-                    result[idx] = Some(info);
-                }
+                )
+            {
+                used_family_indices.insert(info.family_index);
+                Self::update_used_queues(&mut used_queues, info.family_index, info.queue_index);
+                shared_queues.push(info);
+                result[idx] = Some(info);
             }
         }
 
         // Final pass: Try fallback sharing for remaining requests
         for (idx, request) in queue_requests.iter().enumerate() {
-            if result[idx].is_none() && request.allow_fallback_share {
-                if let Some(shared_info) =
+            if result[idx].is_none()
+                && request.allow_fallback_share
+                && let Some(shared_info) =
                     Self::find_shareable_queue(request.required_flags, &shared_queues)
-                {
-                    let mut info = shared_info;
-                    info.is_shared = true;
-                    result[idx] = Some(info);
-                }
+            {
+                let mut info = shared_info;
+                info.is_shared = true;
+                result[idx] = Some(info);
             }
         }
 
@@ -208,7 +209,7 @@ impl QueueImpl {
 
             if excluded_count < min_excluded_flags
                 || (excluded_count == min_excluded_flags
-                    && best_match.map_or(true, |(_, _, _, best_score)| score < best_score))
+                    && best_match.is_none_or(|(_, _, _, best_score)| score < best_score))
             {
                 min_excluded_flags = excluded_count;
                 best_match = Some((family_index, flags, used_count, score));

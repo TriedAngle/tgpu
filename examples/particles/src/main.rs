@@ -333,14 +333,14 @@ impl Render {
             },
         );
 
-        let particle_groups = (PARTICLE_COUNT + 255) / 256;
+        let particle_groups = PARTICLE_COUNT.div_ceil(256);
         recorder.bind_compute_pipeline(&self.compute_pipeline);
         recorder.bind_compute_descriptor_set(&self.descriptor_set, &self.compute_pipeline, 0, &[]);
         recorder.push_compute_constants(&self.compute_pipeline, self.pc);
         recorder.dispatch(particle_groups as u32, 1, 1);
 
-        let width = (self.swapchain.extent().width + 15) / 16;
-        let height = (self.swapchain.extent().height + 15) / 16;
+        let width = self.swapchain.extent().width.div_ceil(16);
+        let height = self.swapchain.extent().height.div_ceil(16);
         recorder.bind_compute_pipeline(&self.clear_pipeline);
         recorder.bind_compute_descriptor_set(&self.descriptor_set, &self.clear_pipeline, 0, &[]);
         recorder.push_compute_constants(&self.clear_pipeline, self.pc);

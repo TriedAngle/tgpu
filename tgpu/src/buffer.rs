@@ -2,8 +2,6 @@ use ash::vk;
 use std::{cell::UnsafeCell, ptr, sync::Arc};
 use vkm::Alloc;
 
-use bitflags;
-
 use crate::{Device, GPUError, Label, raw::RawDevice};
 
 bitflags::bitflags! {
@@ -161,7 +159,7 @@ impl Buffer {
 
     pub fn write(&self, data: &[u8], offset: usize) {
         debug_assert!(
-            self.inner.usage.contains(BufferUsage::MAP_READ),
+            self.inner.usage.contains(BufferUsage::MAP_WRITE),
             "Writing requires MAP_WRITE"
         );
         let size = data.len();

@@ -160,7 +160,7 @@ impl Device {
             .map(|binding| {
                 vk::DescriptorSetLayoutBinding::default()
                     .binding(binding.binding)
-                    .descriptor_type(binding.ty.clone().into())
+                    .descriptor_type(binding.ty.into())
                     .descriptor_count(binding.count)
                     .stage_flags(binding.stages)
             })
@@ -221,7 +221,7 @@ impl Device {
 
         for layout in info.layouts {
             for binding in &layout.bindings {
-                let ty: vk::DescriptorType = binding.ty.clone().into();
+                let ty: vk::DescriptorType = binding.ty.into();
                 *type_counts.entry(ty).or_default() += binding.count;
             }
         }
