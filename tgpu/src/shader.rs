@@ -286,7 +286,7 @@ fn fmain(input: VertexOutput) -> @location(0) vec4f {
 
         let (device, mut queues) = instance
             .request_device(
-                &crate::DeviceCreateInfo {},
+                &crate::DeviceCreateInfo::default(),
                 adapter,
                 &[crate::QueueRequest {
                     required_flags: crate::QueueFlags::GRAPHICS,

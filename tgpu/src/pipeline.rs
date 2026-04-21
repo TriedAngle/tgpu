@@ -80,7 +80,10 @@ pub struct RenderPipelineImpl {
 }
 
 impl RenderPipelineImpl {
-    pub fn new(device: Arc<DeviceImpl>, info: &RenderPipelineInfo) -> RenderPipelineImpl {
+    pub fn try_new(
+        device: Arc<DeviceImpl>,
+        info: &RenderPipelineInfo,
+    ) -> Result<RenderPipelineImpl, crate::GPUError> {
         let mut push_constant_ranges = Vec::new();
         if let Some(size) = info.push_constant_size {
             push_constant_ranges.push(
@@ -104,7 +107,7 @@ impl RenderPipelineImpl {
             device
                 .handle
                 .create_pipeline_layout(&layout_info, None)
-                .unwrap()
+                .map_err(crate::GPUError::from)?
         };
 
         let vertex_stage_name = std::ffi::CString::new(info.vertex_shader.name).unwrap();
@@ -198,18 +201,22 @@ impl RenderPipelineImpl {
             device
                 .handle
                 .create_graphics_pipelines(vk::PipelineCache::null(), &[create_info], None)
-                .unwrap()[0]
+                .map_err(|(_, err)| crate::GPUError::from(err))?[0]
         };
 
         if let Some(label) = &info.label {
             unsafe { device.attach_label(handle, label) };
         }
 
-        RenderPipelineImpl {
+        Ok(RenderPipelineImpl {
             handle,
             layout,
             device,
-        }
+        })
+    }
+
+    pub fn new(device: Arc<DeviceImpl>, info: &RenderPipelineInfo) -> RenderPipelineImpl {
+        Self::try_new(device, info).expect("Create render pipeline")
     }
 }
 
@@ -276,9 +283,17 @@ impl ComputePipelineImpl {
 }
 
 impl Device {
+    pub fn try_create_render_pipeline(
+        &self,
+        info: &RenderPipelineInfo<'_>,
+    ) -> Result<RenderPipeline, crate::GPUError> {
+        let inner = RenderPipelineImpl::try_new(self.inner.clone(), info)?;
+        Ok(RenderPipeline { inner })
+    }
+
     pub fn create_render_pipeline(&self, info: &RenderPipelineInfo<'_>) -> RenderPipeline {
-        let inner = RenderPipelineImpl::new(self.inner.clone(), info);
-        RenderPipeline { inner }
+        self.try_create_render_pipeline(info)
+            .expect("Create render pipeline")
     }
 
     pub fn create_compute_pipeline(&self, info: &ComputePipelineInfo<'_>) -> ComputePipeline {

@@ -53,6 +53,7 @@ pub struct SwapchainImpl {
 
     pub max_flight: usize,
     pub preferred_extent: vk::Extent2D,
+    pub preferred_present_mode: vk::PresentModeKHR,
     pub formats: Arc<[vk::SurfaceFormatKHR]>,
     pub format: vk::SurfaceFormatKHR,
     pub present_modes: Arc<[vk::PresentModeKHR]>,
@@ -116,6 +117,7 @@ impl SwapchainImpl {
 
             max_flight: info.preferred_image_count,
             preferred_extent: info.preferred_extent,
+            preferred_present_mode: info.preferred_present_mode,
             formats: Arc::from(formats),
             format,
             present_modes: Arc::from(present_modes),
@@ -428,7 +430,7 @@ impl SwapchainImpl {
             self.device.adapter.handle,
             self.preferred_extent,
             self.resources.images.len() as u32,
-            self.resources.present_mode,
+            self.preferred_present_mode,
             self.format,
             Some(self.resources.handle),
         )?;
@@ -458,6 +460,10 @@ impl Swapchain {
         self.inner.preferred_extent = extent;
     }
 
+    pub fn set_preferred_present_mode(&mut self, present_mode: vk::PresentModeKHR) {
+        self.inner.preferred_present_mode = present_mode;
+    }
+
     #[inline]
     pub fn acquire_next(&mut self, timeout: Option<u64>) -> Result<Frame, GPUError> {
         self.inner.acquire_next(timeout)
@@ -481,6 +487,21 @@ impl Swapchain {
     pub fn recreate(&mut self) -> Result<(), GPUError> {
         self.inner.recreate()?;
         Ok(())
+    }
+
+    #[inline]
+    pub fn preferred_present_mode(&self) -> vk::PresentModeKHR {
+        self.inner.preferred_present_mode
+    }
+
+    #[inline]
+    pub fn present_mode(&self) -> vk::PresentModeKHR {
+        self.inner.resources.present_mode
+    }
+
+    #[inline]
+    pub fn supported_present_modes(&self) -> &[vk::PresentModeKHR] {
+        self.inner.present_modes.as_ref()
     }
 
     #[inline]

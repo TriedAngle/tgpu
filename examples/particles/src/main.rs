@@ -79,7 +79,7 @@ impl Render {
         let adapter = adapters[0].clone();
 
         let (device, mut queues) = instance.request_device(
-            &tgpu::DeviceCreateInfo {},
+            &tgpu::DeviceCreateInfo::default(),
             adapter,
             &[tgpu::QueueRequest {
                 required_flags: tgpu::QueueFlags::GRAPHICS,

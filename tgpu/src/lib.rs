@@ -37,7 +37,7 @@ pub mod raw {
     pub use crate::sync::SemaphoreImpl;
 }
 
-pub use adapter::Adapter;
+pub use adapter::{Adapter, AdapterFeatures};
 pub use allocations::Allocation;
 pub use ash;
 pub use ash::vk::{
@@ -61,7 +61,7 @@ pub use descriptor::{
     DescriptorBinding, DescriptorPool, DescriptorPoolInfo, DescriptorSet, DescriptorSetLayout,
     DescriptorSetLayoutInfo, DescriptorType, DescriptorWrite,
 };
-pub use device::{Device, DeviceCreateInfo};
+pub use device::{Device, DeviceCreateInfo, DeviceFeatures};
 pub use image::{
     BlitImageInfo, CopyBufferToImageInfo, CopyImageInfo, Image, ImageDesc, ImageFlags, ImageLayout,
     ImageLayoutTransition, ImageTransition, ImageUses, ImageView, ImageViewCreateInfo,

@@ -8,6 +8,11 @@ pub struct Adapter {
     pub(crate) inner: RawAdapter,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AdapterFeatures {
+    pub fill_mode_non_solid: bool,
+}
+
 pub type RawAdapter = Arc<AdapterImpl>;
 
 #[derive(Debug)]
@@ -55,6 +60,14 @@ impl AdapterImpl {
 
     pub unsafe fn handle(&self) -> vk::PhysicalDevice {
         self.handle
+    }
+}
+
+impl Adapter {
+    pub fn features(&self) -> AdapterFeatures {
+        AdapterFeatures {
+            fill_mode_non_solid: self.inner.features.fill_mode_non_solid == vk::TRUE,
+        }
     }
 }
 

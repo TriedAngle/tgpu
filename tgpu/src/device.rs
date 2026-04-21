@@ -36,8 +36,15 @@ pub struct DeviceImpl {
     pub allocator: Arc<ManuallyDrop<vkm::Allocator>>,
 }
 
-#[derive(Default)]
-pub struct DeviceCreateInfo {}
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DeviceFeatures {
+    pub fill_mode_non_solid: bool,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct DeviceCreateInfo {
+    pub features: DeviceFeatures,
+}
 
 impl Device {
     pub fn wait_idle(&self) {
@@ -47,18 +54,28 @@ impl Device {
 
 impl DeviceImpl {
     pub fn new(
-        _info: &DeviceCreateInfo,
+        info: &DeviceCreateInfo,
         instance: RawInstance,
         adapter: RawAdapter,
         queue_requests: &[QueueRequest],
     ) -> Result<(RawDevice, Vec<QueueImpl>), GPUError> {
-        let mut pdev_features2 = vk::PhysicalDeviceFeatures2::default().features(
-            vk::PhysicalDeviceFeatures::default()
-                .shader_sampled_image_array_dynamic_indexing(true)
-                .shader_storage_image_array_dynamic_indexing(true)
-                .shader_storage_buffer_array_dynamic_indexing(true)
-                .shader_uniform_buffer_array_dynamic_indexing(true),
-        );
+        if info.features.fill_mode_non_solid && adapter.features.fill_mode_non_solid == vk::FALSE {
+            return Err(GPUError::Validation(
+                "fill_mode_non_solid is not supported by the selected adapter",
+            ));
+        }
+
+        let mut requested_features = vk::PhysicalDeviceFeatures::default()
+            .shader_sampled_image_array_dynamic_indexing(true)
+            .shader_storage_image_array_dynamic_indexing(true)
+            .shader_storage_buffer_array_dynamic_indexing(true)
+            .shader_uniform_buffer_array_dynamic_indexing(true);
+        if info.features.fill_mode_non_solid {
+            requested_features = requested_features.fill_mode_non_solid(true);
+        }
+
+        let mut pdev_features2 =
+            vk::PhysicalDeviceFeatures2::default().features(requested_features);
 
         // let mut vulkan_1_3_features = vk::PhysicalDeviceVulkan13Features::default()
         //     .dynamic_rendering(true)
