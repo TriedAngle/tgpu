@@ -9,8 +9,8 @@ use std::{
 };
 
 use crate::{
-    BlitImageInfo, ComputePipeline, CopyImageInfo, DescriptorSet, GPUError, Image, ImageTransition,
-    Queue, RenderPipeline, Semaphore,
+    BlitImageInfo, Buffer, BufferTransition, ComputePipeline, CopyBufferInfo, CopyImageInfo,
+    DescriptorSet, GPUError, Image, ImageTransition, Queue, RenderPipeline, Semaphore,
     raw::{ComputePipelineImpl, QueueImpl, RawDevice, RenderPipelineImpl},
 };
 
@@ -97,6 +97,11 @@ impl CommandRecorder {
         unsafe { inner.image_transition(image.inner.handle, transition) };
     }
 
+    pub fn buffer_transition(&mut self, buffer: &Buffer, transition: BufferTransition) {
+        let inner = unsafe { &mut *self.inner.get() };
+        unsafe { inner.buffer_transition(buffer.inner.handle, transition) };
+    }
+
     pub fn bind_render_pipeline(&mut self, pipeline: &RenderPipeline) {
         let inner = unsafe { &mut *self.inner.get() };
         let inner_pipeline = &pipeline.inner;
@@ -128,6 +133,11 @@ impl CommandRecorder {
     pub fn copy_image(&mut self, info: &CopyImageInfo<'_>) {
         let inner = unsafe { &mut *self.inner.get() };
         unsafe { inner.copy_image(info) };
+    }
+
+    pub fn copy_buffer(&mut self, info: &CopyBufferInfo<'_>) {
+        let inner = unsafe { &mut *self.inner.get() };
+        unsafe { inner.copy_buffer(info) };
     }
 
     pub fn blit_image(&mut self, info: &BlitImageInfo<'_>) {
@@ -346,6 +356,37 @@ impl CommandRecorderImpl {
         }
     }
 
+    pub unsafe fn buffer_transition(&self, buffer: vk::Buffer, transition: BufferTransition) {
+        let (src_stage, src_access) = (transition.from.stage, transition.from.access);
+        let (dst_stage, dst_access) = (transition.to.stage, transition.to.access);
+
+        let mut barrier = vk::BufferMemoryBarrier2::default()
+            .buffer(buffer)
+            .offset(transition.offset)
+            .size(transition.size)
+            .src_stage_mask(src_stage)
+            .src_access_mask(src_access)
+            .dst_stage_mask(dst_stage)
+            .dst_access_mask(dst_access);
+
+        if let Some((src, dst)) = transition.queue {
+            barrier.src_queue_family_index = src.inner.info.family_index;
+            barrier.dst_queue_family_index = dst.inner.info.family_index;
+        }
+
+        let buffer_memory_barriers = [barrier];
+        let dependency_info = vk::DependencyInfo::default()
+            .dependency_flags(transition.dependency)
+            .buffer_memory_barriers(&buffer_memory_barriers);
+
+        unsafe {
+            self.device
+                .ext
+                .sync2
+                .cmd_pipeline_barrier2(self.buffer.handle, &dependency_info);
+        }
+    }
+
     pub unsafe fn copy_image(&self, info: &CopyImageInfo<'_>) {
         if info.regions.is_empty() {
             return;
@@ -453,6 +494,21 @@ impl CommandRecorderImpl {
                     .handle
                     .cmd_blit_image2(self.buffer.handle, &blit_info2);
             }
+        }
+    }
+
+    pub unsafe fn copy_buffer(&self, info: &CopyBufferInfo<'_>) {
+        if info.regions.is_empty() {
+            return;
+        }
+
+        unsafe {
+            self.device.handle.cmd_copy_buffer(
+                self.buffer.handle,
+                info.src.inner.handle,
+                info.dst.inner.handle,
+                info.regions,
+            );
         }
     }
     pub unsafe fn bind_compute_descriptor_set(

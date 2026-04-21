@@ -169,6 +169,83 @@ pub struct Buffer {
     pub host_access: HostAccess,
 }
 
+#[derive(Debug, Copy, Clone, Default)]
+pub struct BufferAccessTransition {
+    pub stage: vk::PipelineStageFlags2,
+    pub access: vk::AccessFlags2,
+}
+
+impl BufferAccessTransition {
+    pub const NONE: Self = Self::new(vk::PipelineStageFlags2::NONE, vk::AccessFlags2::NONE);
+    pub const TRANSFER_SRC: Self = Self::new(
+        vk::PipelineStageFlags2::TRANSFER,
+        vk::AccessFlags2::TRANSFER_READ,
+    );
+    pub const TRANSFER_DST: Self = Self::new(
+        vk::PipelineStageFlags2::TRANSFER,
+        vk::AccessFlags2::TRANSFER_WRITE,
+    );
+    pub const INDIRECT: Self = Self::new(
+        vk::PipelineStageFlags2::DRAW_INDIRECT,
+        vk::AccessFlags2::INDIRECT_COMMAND_READ,
+    );
+
+    pub const fn new(stage: vk::PipelineStageFlags2, access: vk::AccessFlags2) -> Self {
+        Self { stage, access }
+    }
+
+    pub fn compute_storage_read() -> Self {
+        Self::new(
+            vk::PipelineStageFlags2::COMPUTE_SHADER,
+            vk::AccessFlags2::SHADER_READ,
+        )
+    }
+
+    pub fn compute_storage_write() -> Self {
+        Self::new(
+            vk::PipelineStageFlags2::COMPUTE_SHADER,
+            vk::AccessFlags2::SHADER_WRITE,
+        )
+    }
+
+    pub fn compute_storage_read_write() -> Self {
+        Self::new(
+            vk::PipelineStageFlags2::COMPUTE_SHADER,
+            vk::AccessFlags2::SHADER_READ | vk::AccessFlags2::SHADER_WRITE,
+        )
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct BufferTransition<'a> {
+    pub from: BufferAccessTransition,
+    pub to: BufferAccessTransition,
+    pub offset: vk::DeviceSize,
+    pub size: vk::DeviceSize,
+    pub queue: Option<(&'a crate::Queue, &'a crate::Queue)>,
+    pub dependency: vk::DependencyFlags,
+}
+
+impl Default for BufferTransition<'_> {
+    fn default() -> Self {
+        Self {
+            from: BufferAccessTransition::default(),
+            to: BufferAccessTransition::default(),
+            offset: 0,
+            size: vk::WHOLE_SIZE,
+            queue: None,
+            dependency: vk::DependencyFlags::empty(),
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub struct CopyBufferInfo<'a> {
+    pub src: &'a Buffer,
+    pub dst: &'a Buffer,
+    pub regions: &'a [vk::BufferCopy],
+}
+
 impl Device {
     pub fn create_buffer(&self, desc: &BufferDesc<'_>) -> Result<Buffer, GPUError> {
         if desc.size == 0 {

@@ -16,6 +16,7 @@ mod image;
 mod instance;
 mod pipeline;
 mod queue;
+mod render_graph;
 mod resource;
 mod shader;
 mod swapchain;
@@ -46,7 +47,9 @@ pub use bindless::{
     BINDLESS_SAMPLER_BINDING, BINDLESS_STORAGE_IMAGE_BINDING, BindlessHeap, BindlessInfo,
     ReadBufferHandle, RwBufferHandle, SampledImageHandle, SamplerHandle, StorageImageHandle,
 };
-pub use buffer::{Buffer, BufferDesc, BufferUses};
+pub use buffer::{
+    Buffer, BufferAccessTransition, BufferDesc, BufferTransition, BufferUses, CopyBufferInfo,
+};
 pub use command::{
     CommandBuffer, CommandPools, CommandRecorder, RenderInfo, SubmitInfo, ThreadCommandPool,
 };
@@ -64,6 +67,12 @@ pub use image::{
 pub use instance::{Instance, InstanceCreateInfo};
 pub use pipeline::{ComputePipeline, ComputePipelineInfo, RenderPipeline, RenderPipelineInfo};
 pub use queue::{Queue, QueueFamilyInfo, QueueRequest};
+pub use render_graph::{
+    BufferAccess, ColorAttachmentDesc, DepthAttachmentDesc, GraphBuffer, GraphImage, ImageAccess,
+    ImportedBufferDesc, ImportedImageDesc, PassQueue, RenderGraph, RenderGraphCache,
+    RenderGraphError, RenderGraphExecution, RenderGraphInfo, TransientBufferDesc,
+    TransientImageDesc,
+};
 pub use resource::{HostAccess, MemoryPreset};
 pub use shader::{Shader, ShaderEntry, ShaderSource};
 pub use swapchain::{Frame, Swapchain, SwapchainCreateInfo};
