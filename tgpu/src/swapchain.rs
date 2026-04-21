@@ -492,6 +492,16 @@ impl Swapchain {
     pub fn extent(&self) -> vk::Extent2D {
         self.inner.resources.extent
     }
+
+    #[inline]
+    pub fn flight_index(&self) -> usize {
+        self.inner.frame
+    }
+
+    #[inline]
+    pub fn max_frames_in_flight(&self) -> usize {
+        self.inner.max_flight
+    }
 }
 
 impl Device {

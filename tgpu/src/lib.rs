@@ -12,6 +12,8 @@ mod command;
 mod debug;
 mod descriptor;
 mod device;
+#[cfg(feature = "egui")]
+pub mod egui;
 mod image;
 mod instance;
 mod pipeline;
@@ -51,7 +53,8 @@ pub use buffer::{
     Buffer, BufferAccessTransition, BufferDesc, BufferTransition, BufferUses, CopyBufferInfo,
 };
 pub use command::{
-    CommandBuffer, CommandPools, CommandRecorder, RenderInfo, SubmitInfo, ThreadCommandPool,
+    CommandBuffer, CommandPools, CommandRecorder, RenderInfo, RenderRecorder, SubmitInfo,
+    ThreadCommandPool,
 };
 pub use debug::Label;
 pub use descriptor::{
@@ -60,9 +63,10 @@ pub use descriptor::{
 };
 pub use device::{Device, DeviceCreateInfo};
 pub use image::{
-    BlitImageInfo, CopyImageInfo, Image, ImageDesc, ImageFlags, ImageLayout, ImageLayoutTransition,
-    ImageTransition, ImageUses, ImageView, ImageViewCreateInfo, ImageViewOptions, Sampler,
-    SamplerCreateInfo, Texture2DDesc, TextureUses, ViewImage, ViewImageDesc,
+    BlitImageInfo, CopyBufferToImageInfo, CopyImageInfo, Image, ImageDesc, ImageFlags, ImageLayout,
+    ImageLayoutTransition, ImageTransition, ImageUses, ImageView, ImageViewCreateInfo,
+    ImageViewOptions, Sampler, SamplerCreateInfo, Texture2DDesc, TextureUses, ViewImage,
+    ViewImageDesc,
 };
 pub use instance::{Instance, InstanceCreateInfo};
 pub use pipeline::{ComputePipeline, ComputePipelineInfo, RenderPipeline, RenderPipelineInfo};

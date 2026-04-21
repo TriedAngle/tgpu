@@ -3,6 +3,10 @@ name = "tgpu"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = []
+egui = ["dep:egui", "dep:egui-winit"]
+
 [dependencies]
 ash = { workspace = true }  
 ash-window = { workspace = true }
@@ -14,3 +18,5 @@ log = { workspace = true }
 bitflags = { workspace = true }
 bytemuck = { workspace = true }
 tempfile = "3.23.0"
+egui = { workspace = true, optional = true }
+egui-winit = { workspace = true, optional = true }

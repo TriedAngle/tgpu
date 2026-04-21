@@ -9,8 +9,9 @@ use std::{
 };
 
 use crate::{
-    BlitImageInfo, Buffer, BufferTransition, ComputePipeline, CopyBufferInfo, CopyImageInfo,
-    DescriptorSet, GPUError, Image, ImageTransition, Queue, RenderPipeline, Semaphore,
+    BlitImageInfo, Buffer, BufferTransition, ComputePipeline, CopyBufferInfo,
+    CopyBufferToImageInfo, CopyImageInfo, DescriptorSet, GPUError, Image, ImageTransition, Queue,
+    RenderPipeline, Semaphore,
     raw::{ComputePipelineImpl, QueueImpl, RawDevice, RenderPipelineImpl},
 };
 
@@ -140,6 +141,11 @@ impl CommandRecorder {
         unsafe { inner.copy_buffer(info) };
     }
 
+    pub fn copy_buffer_to_image(&mut self, info: &CopyBufferToImageInfo<'_>) {
+        let inner = unsafe { &mut *self.inner.get() };
+        unsafe { inner.copy_buffer_to_image(info) };
+    }
+
     pub fn blit_image(&mut self, info: &BlitImageInfo<'_>) {
         let inner = unsafe { &mut *self.inner.get() };
         unsafe { inner.blit_image(info) };
@@ -207,6 +213,16 @@ impl<'a> RenderRecorder<'a> {
         unsafe { inner.draw(vertex, instance) };
     }
 
+    pub fn draw_indexed(
+        &mut self,
+        index: ops::Range<u32>,
+        vertex_offset: i32,
+        instance: ops::Range<u32>,
+    ) {
+        let inner = unsafe { &mut *self.command_recorder.inner.get() };
+        unsafe { inner.draw_indexed(index, vertex_offset, instance) };
+    }
+
     pub fn image_transition(&mut self, image: &Image, transition: ImageTransition) {
         let inner = unsafe { &mut *self.command_recorder.inner.get() };
         unsafe { inner.image_transition(image.inner.handle, transition) };
@@ -216,6 +232,41 @@ impl<'a> RenderRecorder<'a> {
         let inner = unsafe { &mut *self.command_recorder.inner.get() };
         let inner_pipeline = &pipeline.inner;
         unsafe { inner.bind_render_pipeline(inner_pipeline) };
+    }
+
+    pub fn bind_render_descriptor_set(
+        &mut self,
+        set: &DescriptorSet,
+        pipeline: &RenderPipeline,
+        index: u32,
+        offsets: &[u32],
+    ) {
+        let inner = unsafe { &mut *self.command_recorder.inner.get() };
+        unsafe {
+            inner.bind_render_descriptor_set(set, &pipeline.inner, index, offsets);
+        }
+    }
+
+    pub fn push_render_constants<T: bytemuck::Pod>(&mut self, pipeline: &RenderPipeline, pc: T) {
+        let inner = unsafe { &mut *self.command_recorder.inner.get() };
+        unsafe {
+            inner.push_render_constants(&pipeline.inner, pc);
+        }
+    }
+
+    pub fn bind_vertex_buffer(&mut self, slot: u32, buffer: &Buffer, offset: vk::DeviceSize) {
+        let inner = unsafe { &mut *self.command_recorder.inner.get() };
+        unsafe { inner.bind_vertex_buffer(slot, buffer, offset) };
+    }
+
+    pub fn bind_index_buffer(
+        &mut self,
+        buffer: &Buffer,
+        offset: vk::DeviceSize,
+        index_type: vk::IndexType,
+    ) {
+        let inner = unsafe { &mut *self.command_recorder.inner.get() };
+        unsafe { inner.bind_index_buffer(buffer, offset, index_type) };
     }
 
     pub fn bind_compute_pipeline(&mut self, pipeline: &ComputePipeline) {
@@ -310,6 +361,51 @@ impl CommandRecorderImpl {
                 instance.len() as u32,
                 vertex.start,
                 instance.start,
+            );
+        }
+    }
+
+    pub unsafe fn draw_indexed(
+        &self,
+        index: ops::Range<u32>,
+        vertex_offset: i32,
+        instance: ops::Range<u32>,
+    ) {
+        unsafe {
+            self.device.handle.cmd_draw_indexed(
+                self.buffer.handle,
+                index.len() as u32,
+                instance.len() as u32,
+                index.start,
+                vertex_offset,
+                instance.start,
+            );
+        }
+    }
+
+    pub unsafe fn bind_vertex_buffer(&self, slot: u32, buffer: &Buffer, offset: vk::DeviceSize) {
+        unsafe {
+            self.device.handle.cmd_bind_vertex_buffers(
+                self.buffer.handle,
+                slot,
+                &[buffer.inner.handle],
+                &[offset],
+            );
+        }
+    }
+
+    pub unsafe fn bind_index_buffer(
+        &self,
+        buffer: &Buffer,
+        offset: vk::DeviceSize,
+        index_type: vk::IndexType,
+    ) {
+        unsafe {
+            self.device.handle.cmd_bind_index_buffer(
+                self.buffer.handle,
+                buffer.inner.handle,
+                offset,
+                index_type,
             );
         }
     }
@@ -511,6 +607,23 @@ impl CommandRecorderImpl {
             );
         }
     }
+
+    pub unsafe fn copy_buffer_to_image(&self, info: &CopyBufferToImageInfo<'_>) {
+        if info.regions.is_empty() {
+            return;
+        }
+
+        unsafe {
+            self.device.handle.cmd_copy_buffer_to_image(
+                self.buffer.handle,
+                info.src.inner.handle,
+                info.dst.inner.handle,
+                info.dst_layout.into(),
+                info.regions,
+            );
+        }
+    }
+
     pub unsafe fn bind_compute_descriptor_set(
         &self,
         set: &DescriptorSet,

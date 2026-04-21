@@ -14,7 +14,7 @@ use crate::{
     raw::{QueueImpl, RawAdapter, RawInstance, SemaphoreImpl},
 };
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Device {
     pub inner: RawDevice,
     pub adapter: Adapter,

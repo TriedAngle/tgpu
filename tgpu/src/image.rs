@@ -3,7 +3,9 @@ use std::{fmt, ops, sync::Arc};
 use ash::vk;
 use vkm::Alloc;
 
-use crate::{Allocation, Device, GPUError, HostAccess, Label, MemoryPreset, Queue, raw::RawDevice};
+use crate::{
+    Allocation, Buffer, Device, GPUError, HostAccess, Label, MemoryPreset, Queue, raw::RawDevice,
+};
 
 // TODO: support custom stuff
 bitflags::bitflags! {
@@ -716,6 +718,14 @@ pub struct CopyImageInfo<'a> {
     pub dst: &'a Image,
     pub dst_layout: ImageLayout,
     pub regions: &'a [vk::ImageCopy],
+}
+
+#[derive(Debug, Copy, Clone)]
+pub struct CopyBufferToImageInfo<'a> {
+    pub src: &'a Buffer,
+    pub dst: &'a Image,
+    pub dst_layout: ImageLayout,
+    pub regions: &'a [vk::BufferImageCopy],
 }
 
 #[derive(Debug, Copy, Clone)]

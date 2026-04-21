@@ -98,6 +98,8 @@ pub enum BufferAccess {
     StorageComputeReadWrite,
     TransferSrc,
     TransferDst,
+    Vertex,
+    Index,
     Indirect,
 }
 
@@ -109,6 +111,14 @@ impl BufferAccess {
             Self::StorageComputeReadWrite => BufferAccessTransition::compute_storage_read_write(),
             Self::TransferSrc => BufferAccessTransition::TRANSFER_SRC,
             Self::TransferDst => BufferAccessTransition::TRANSFER_DST,
+            Self::Vertex => BufferAccessTransition::new(
+                vk::PipelineStageFlags2::VERTEX_ATTRIBUTE_INPUT,
+                vk::AccessFlags2::VERTEX_ATTRIBUTE_READ,
+            ),
+            Self::Index => BufferAccessTransition::new(
+                vk::PipelineStageFlags2::INDEX_INPUT,
+                vk::AccessFlags2::INDEX_READ,
+            ),
             Self::Indirect => BufferAccessTransition::INDIRECT,
         }
     }
@@ -126,6 +136,8 @@ impl BufferAccess {
             Self::StorageComputeRead
                 | Self::StorageComputeReadWrite
                 | Self::TransferSrc
+                | Self::Vertex
+                | Self::Index
                 | Self::Indirect
         )
     }
@@ -623,6 +635,13 @@ impl<'a> RenderGraph<'a> {
         } else {
             (compile_metadata(&metadata, queue_caps)?, false)
         };
+        let mut plan = plan;
+
+        for (compiled, pass) in plan.passes.iter_mut().zip(&metadata.passes) {
+            if pass.kind == PassKind::Render {
+                compiled.render = Some(build_render_targets(pass, &metadata)?);
+            }
+        }
 
         let realized_buffers = realize_buffers(self.info.device, &self.buffers)?;
         let realized_images = realize_images(self.info.device, &self.images)?;
@@ -2227,6 +2246,8 @@ fn buffer_access_name(access: BufferAccess) -> &'static str {
         BufferAccess::StorageComputeReadWrite => "storage-compute-read-write",
         BufferAccess::TransferSrc => "transfer-src",
         BufferAccess::TransferDst => "transfer-dst",
+        BufferAccess::Vertex => "vertex",
+        BufferAccess::Index => "index",
         BufferAccess::Indirect => "indirect",
     }
 }
@@ -2715,6 +2736,62 @@ mod tests {
         let prepared_b = prepare_metadata(&graph_b, graphics_only()).unwrap();
 
         assert_eq!(prepared_a.signature, prepared_b.signature);
+    }
+
+    #[test]
+    fn cached_render_targets_refresh_clear_color_from_current_metadata() {
+        let base_pass = |color: [f32; 4]| PassMetadata {
+            name: "present".into(),
+            kind: PassKind::Render,
+            requested_queue: PassQueue::Graphics,
+            buffer_uses: vec![],
+            image_uses: vec![ImageUse::ColorAttachment {
+                image: GraphImage(0),
+                desc: ColorAttachmentDesc::clear(color),
+            }],
+        };
+
+        let base_image = ImageMetadata {
+            name: "backbuffer".into(),
+            extent: vk::Extent3D {
+                width: 32,
+                height: 32,
+                depth: 1,
+            },
+            aspect: vk::ImageAspectFlags::COLOR,
+            initial: ImageLayoutTransition::UNDEFINED,
+            initialized: false,
+            kind: ImageKind::Swapchain,
+        };
+
+        let graph_a = GraphMetadata {
+            buffers: vec![],
+            images: vec![base_image.clone()],
+            passes: vec![base_pass([1.0, 0.0, 0.0, 1.0])],
+        };
+        let graph_b = GraphMetadata {
+            buffers: vec![],
+            images: vec![base_image],
+            passes: vec![base_pass([0.0, 0.0, 1.0, 1.0])],
+        };
+
+        let prepared_a = prepare_metadata(&graph_a, graphics_only()).unwrap();
+        let prepared_b = prepare_metadata(&graph_b, graphics_only()).unwrap();
+        assert_eq!(prepared_a.signature, prepared_b.signature);
+
+        let mut cached_plan = compile_metadata(&prepared_a.metadata, graphics_only()).unwrap();
+        for (compiled, pass) in cached_plan
+            .passes
+            .iter_mut()
+            .zip(&prepared_b.metadata.passes)
+        {
+            if pass.kind == PassKind::Render {
+                compiled.render = Some(build_render_targets(pass, &prepared_b.metadata).unwrap());
+            }
+        }
+
+        let render = cached_plan.passes[0].render.as_ref().unwrap();
+        assert_eq!(render.colors[0].desc.clear.float32, [0.0, 0.0, 1.0, 1.0]);
     }
 
     #[test]
