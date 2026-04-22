@@ -110,6 +110,13 @@ pub struct DescriptorPool {
 
 #[derive(Debug, Clone)]
 pub enum DescriptorWrite<'a> {
+    UniformBuffer {
+        binding: u32,
+        buffer: &'a Buffer,
+        offset: vk::DeviceSize,
+        range: vk::DeviceSize,
+        array_element: Option<u32>,
+    },
     StorageBuffer {
         binding: u32,
         buffer: &'a Buffer,
@@ -292,6 +299,23 @@ impl DescriptorSet {
 
         for write in writes {
             match write {
+                DescriptorWrite::UniformBuffer {
+                    binding,
+                    buffer,
+                    offset,
+                    range,
+                    array_element,
+                } => {
+                    buffer_infos.push((
+                        *binding,
+                        vk::DescriptorType::UNIFORM_BUFFER,
+                        vk::DescriptorBufferInfo::default()
+                            .buffer(buffer.inner.handle)
+                            .offset(*offset)
+                            .range(*range),
+                        array_element.unwrap_or(0),
+                    ));
+                }
                 DescriptorWrite::StorageBuffer {
                     binding,
                     buffer,

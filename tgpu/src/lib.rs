@@ -37,7 +37,7 @@ pub mod raw {
     pub use crate::sync::SemaphoreImpl;
 }
 
-pub use adapter::{Adapter, AdapterFeatures};
+pub use adapter::{Adapter, AdapterDeviceType, AdapterFeatures, AdapterInfo, AdapterLimits};
 pub use allocations::Allocation;
 pub use ash;
 pub use ash::vk::{
