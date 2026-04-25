@@ -6,13 +6,14 @@ use crate::{Device, GPUError, HostAccess, Label, MemoryPreset, raw::RawDevice};
 
 bitflags::bitflags! {
     #[derive(Debug, Clone, Copy, Default)]
-    pub struct BufferUses: u32 {
+pub struct BufferUses: u32 {
         const COPY_SRC = 1 << 0;
         const COPY_DST = 1 << 1;
         const INDEX = 1 << 2;
         const VERTEX = 1 << 3;
         const UNIFORM = 1 << 4;
         const STORAGE = 1 << 5;
+        const DEVICE_ADDRESS = 1 << 6;
     }
 }
 
@@ -28,6 +29,7 @@ bitflags::bitflags! {
         const UNIFORM = 1 << 6;
         const STORAGE = 1 << 7;
         const QUERY = 1 << 8;
+        const DEVICE_ADDRESS = 1 << 9;
         const SHARE = 1 << 12;
 
         const DEVICE = 1 << 16;
@@ -60,6 +62,9 @@ impl From<BufferUsage> for vk::BufferUsageFlags {
         }
         if usage.contains(BufferUsage::STORAGE) {
             vk_usage |= vk::BufferUsageFlags::STORAGE_BUFFER;
+        }
+        if usage.contains(BufferUsage::DEVICE_ADDRESS) {
+            vk_usage |= vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS;
         }
         vk_usage
     }
@@ -275,6 +280,13 @@ impl Device {
             ));
         }
 
+        if desc.usage.contains(BufferUses::DEVICE_ADDRESS) && !self.inner.features.buffer_device_address
+        {
+            return Err(GPUError::Validation(
+                "BufferUses::DEVICE_ADDRESS requires buffer_device_address to be enabled on the device",
+            ));
+        }
+
         let mut usage: BufferUsage = desc.usage.into();
 
         match desc.memory {
@@ -371,6 +383,14 @@ impl Buffer {
         let size = std::mem::size_of_val(data);
         self.read(bytemuck::cast_slice_mut(data), 0, size);
     }
+
+    pub fn device_address(&self) -> vk::DeviceAddress {
+        assert!(
+            self.uses.contains(BufferUses::DEVICE_ADDRESS),
+            "Buffer::device_address requires BufferUses::DEVICE_ADDRESS"
+        );
+        unsafe { self.inner.device.buffer_device_address(self.inner.handle) }
+    }
 }
 
 impl From<BufferUses> for BufferUsage {
@@ -393,6 +413,9 @@ impl From<BufferUses> for BufferUsage {
         }
         if usage.contains(BufferUses::STORAGE) {
             raw |= BufferUsage::STORAGE;
+        }
+        if usage.contains(BufferUses::DEVICE_ADDRESS) {
+            raw |= BufferUsage::DEVICE_ADDRESS;
         }
         raw
     }

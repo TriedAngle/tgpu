@@ -37,7 +37,10 @@ pub mod raw {
     pub use crate::sync::SemaphoreImpl;
 }
 
-pub use adapter::{Adapter, AdapterDeviceType, AdapterFeatures, AdapterInfo, AdapterLimits};
+pub use adapter::{
+    Adapter, AdapterDescriptorIndexingFeatures, AdapterDeviceType, AdapterFeatures, AdapterInfo,
+    AdapterLimits, RankedAdapter,
+};
 pub use allocations::Allocation;
 pub use ash;
 pub use ash::vk::{
@@ -46,8 +49,9 @@ pub use ash::vk::{
 };
 pub use bindless::{
     BINDLESS_READ_BUFFER_BINDING, BINDLESS_RW_BUFFER_BINDING, BINDLESS_SAMPLED_IMAGE_BINDING,
-    BINDLESS_SAMPLER_BINDING, BINDLESS_STORAGE_IMAGE_BINDING, BindlessHeap, BindlessInfo,
-    ReadBufferHandle, RwBufferHandle, SampledImageHandle, SamplerHandle, StorageImageHandle,
+    BINDLESS_SAMPLER_BINDING, BINDLESS_STORAGE_IMAGE_BINDING, BINDLESS_UNIFORM_BUFFER_BINDING,
+    BindlessHeap, BindlessInfo, ReadBufferHandle, RwBufferHandle, SampledImageHandle,
+    SamplerHandle, StorageImageHandle, UniformBufferHandle,
 };
 pub use buffer::{
     Buffer, BufferAccessTransition, BufferDesc, BufferTransition, BufferUses, CopyBufferInfo,
@@ -58,8 +62,8 @@ pub use command::{
 };
 pub use debug::Label;
 pub use descriptor::{
-    DescriptorBinding, DescriptorPool, DescriptorPoolInfo, DescriptorSet, DescriptorSetLayout,
-    DescriptorSetLayoutInfo, DescriptorType, DescriptorWrite,
+    DescriptorArena, DescriptorBinding, DescriptorPool, DescriptorPoolInfo, DescriptorSet,
+    DescriptorSetLayout, DescriptorSetLayoutInfo, DescriptorType, DescriptorWrite,
 };
 pub use device::{Device, DeviceCreateInfo, DeviceFeatures};
 pub use image::{

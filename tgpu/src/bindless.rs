@@ -13,6 +13,7 @@ pub const BINDLESS_RW_BUFFER_BINDING: u32 = 1;
 pub const BINDLESS_SAMPLED_IMAGE_BINDING: u32 = 2;
 pub const BINDLESS_STORAGE_IMAGE_BINDING: u32 = 3;
 pub const BINDLESS_SAMPLER_BINDING: u32 = 4;
+pub const BINDLESS_UNIFORM_BUFFER_BINDING: u32 = 5;
 
 #[derive(Debug, Default, Clone, Copy)]
 pub struct BindlessInfo {
@@ -21,6 +22,7 @@ pub struct BindlessInfo {
     pub max_sampled_images: u32,
     pub max_storage_images: u32,
     pub max_samplers: u32,
+    pub max_uniform_buffers: u32,
 }
 
 #[repr(transparent)]
@@ -43,6 +45,10 @@ pub struct StorageImageHandle(pub u32);
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct SamplerHandle(pub u32);
 
+#[repr(transparent)]
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Hash, bytemuck::Pod, bytemuck::Zeroable)]
+pub struct UniformBufferHandle(pub u32);
+
 pub struct BindlessHeap {
     set: DescriptorSet,
     layout: DescriptorSetLayout,
@@ -51,6 +57,7 @@ pub struct BindlessHeap {
     sampled_images: SlotAllocator,
     storage_images: SlotAllocator,
     samplers: SlotAllocator,
+    uniform_buffers: SlotAllocator,
 }
 
 #[derive(Debug)]
@@ -177,6 +184,11 @@ impl Device {
                 DescriptorType::Sampler,
                 info.max_samplers,
             ),
+            bindless_binding(
+                BINDLESS_UNIFORM_BUFFER_BINDING,
+                DescriptorType::UniformBuffer,
+                info.max_uniform_buffers,
+            ),
         ];
 
         let layout = self.create_descriptor_set_layout(&DescriptorSetLayoutInfo {
@@ -202,6 +214,7 @@ impl Device {
             sampled_images: SlotAllocator::new("sampled image", info.max_sampled_images),
             storage_images: SlotAllocator::new("storage image", info.max_storage_images),
             samplers: SlotAllocator::new("sampler", info.max_samplers),
+            uniform_buffers: SlotAllocator::new("uniform buffer", info.max_uniform_buffers),
         }
     }
 }
@@ -332,5 +345,35 @@ impl BindlessHeap {
 
     pub fn free_sampler(&self, handle: SamplerHandle) {
         self.samplers.free(handle.0);
+    }
+
+    pub fn add_uniform_buffer(
+        &self,
+        buffer: &Buffer,
+        range: vk::DeviceSize,
+    ) -> UniformBufferHandle {
+        let handle = UniformBufferHandle(self.uniform_buffers.allocate());
+        self.update_uniform_buffer(handle, buffer, range);
+        handle
+    }
+
+    pub fn update_uniform_buffer(
+        &self,
+        handle: UniformBufferHandle,
+        buffer: &Buffer,
+        range: vk::DeviceSize,
+    ) {
+        self.uniform_buffers.assert_allocated(handle.0);
+        self.set.write(&[DescriptorWrite::UniformBuffer {
+            binding: BINDLESS_UNIFORM_BUFFER_BINDING,
+            buffer,
+            offset: 0,
+            range,
+            array_element: Some(handle.0),
+        }]);
+    }
+
+    pub fn free_uniform_buffer(&self, handle: UniformBufferHandle) {
+        self.uniform_buffers.free(handle.0);
     }
 }

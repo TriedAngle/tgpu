@@ -32,13 +32,32 @@ pub struct DeviceImpl {
     pub handle: ash::Device,
     pub instance: RawInstance,
     pub adapter: RawAdapter,
+    pub features: DeviceFeatures,
     pub ext: Extensions,
     pub allocator: Arc<ManuallyDrop<vkm::Allocator>>,
 }
 
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub struct DeviceFeatures {
     pub fill_mode_non_solid: bool,
+    pub descriptor_indexing: bool,
+    pub buffer_device_address: bool,
+}
+
+impl DeviceFeatures {
+    pub fn modern_bindless_defaults() -> Self {
+        Self {
+            fill_mode_non_solid: false,
+            descriptor_indexing: true,
+            buffer_device_address: false,
+        }
+    }
+}
+
+impl Default for DeviceFeatures {
+    fn default() -> Self {
+        Self::modern_bindless_defaults()
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -59,19 +78,45 @@ impl DeviceImpl {
         adapter: RawAdapter,
         queue_requests: &[QueueRequest],
     ) -> Result<(RawDevice, Vec<QueueImpl>), GPUError> {
-        if info.features.fill_mode_non_solid && adapter.features.fill_mode_non_solid == vk::FALSE {
+        if info.features.fill_mode_non_solid && !adapter.features.fill_mode_non_solid {
             return Err(GPUError::Validation(
                 "fill_mode_non_solid is not supported by the selected adapter",
             ));
         }
 
-        let mut requested_features = vk::PhysicalDeviceFeatures::default()
-            .shader_sampled_image_array_dynamic_indexing(true)
-            .shader_storage_image_array_dynamic_indexing(true)
-            .shader_storage_buffer_array_dynamic_indexing(true)
-            .shader_uniform_buffer_array_dynamic_indexing(true);
+        if info.features.descriptor_indexing
+            && !adapter.features.descriptor_indexing.supports_global_bindless()
+        {
+            return Err(GPUError::Validation(
+                "descriptor_indexing is not fully supported by the selected adapter",
+            ));
+        }
+
+        if info.features.buffer_device_address && !adapter.features.buffer_device_address {
+            return Err(GPUError::Validation(
+                "buffer_device_address is not supported by the selected adapter",
+            ));
+        }
+
+        if info.features.buffer_device_address && !adapter.features.shader_int64 {
+            return Err(GPUError::Validation(
+                "buffer_device_address requires shaderInt64 support on the selected adapter",
+            ));
+        }
+
+        let mut requested_features = vk::PhysicalDeviceFeatures::default();
+        if info.features.descriptor_indexing {
+            requested_features = requested_features
+                .shader_sampled_image_array_dynamic_indexing(true)
+                .shader_storage_image_array_dynamic_indexing(true)
+                .shader_storage_buffer_array_dynamic_indexing(true)
+                .shader_uniform_buffer_array_dynamic_indexing(true);
+        }
         if info.features.fill_mode_non_solid {
             requested_features = requested_features.fill_mode_non_solid(true);
+        }
+        if info.features.buffer_device_address {
+            requested_features = requested_features.shader_int64(true);
         }
 
         let mut pdev_features2 =
@@ -89,15 +134,21 @@ impl DeviceImpl {
 
         let mut descriptor_indexing_features =
             vk::PhysicalDeviceDescriptorIndexingFeatures::default()
-                .descriptor_binding_partially_bound(true)
-                .descriptor_binding_sampled_image_update_after_bind(true)
-                .descriptor_binding_storage_image_update_after_bind(true)
-                .descriptor_binding_storage_buffer_update_after_bind(true)
-                .runtime_descriptor_array(true)
-                .descriptor_binding_update_unused_while_pending(true)
-                .shader_sampled_image_array_non_uniform_indexing(true)
-                .shader_storage_image_array_non_uniform_indexing(true)
-                .shader_storage_buffer_array_non_uniform_indexing(true);
+                .descriptor_binding_partially_bound(info.features.descriptor_indexing)
+                .descriptor_binding_uniform_buffer_update_after_bind(info.features.descriptor_indexing)
+                .descriptor_binding_sampled_image_update_after_bind(info.features.descriptor_indexing)
+                .descriptor_binding_storage_image_update_after_bind(info.features.descriptor_indexing)
+                .descriptor_binding_storage_buffer_update_after_bind(info.features.descriptor_indexing)
+                .runtime_descriptor_array(info.features.descriptor_indexing)
+                .descriptor_binding_update_unused_while_pending(info.features.descriptor_indexing)
+                .shader_uniform_buffer_array_non_uniform_indexing(info.features.descriptor_indexing)
+                .shader_sampled_image_array_non_uniform_indexing(info.features.descriptor_indexing)
+                .shader_storage_image_array_non_uniform_indexing(info.features.descriptor_indexing)
+                .shader_storage_buffer_array_non_uniform_indexing(info.features.descriptor_indexing);
+
+        let mut buffer_device_address_features =
+            vk::PhysicalDeviceBufferDeviceAddressFeatures::default()
+                .buffer_device_address(info.features.buffer_device_address);
 
         let mut synchronization_two_features =
             vk::PhysicalDeviceSynchronization2Features::default().synchronization2(true);
@@ -159,24 +210,27 @@ impl DeviceImpl {
             .push_next(&mut timeline_semaphore_features)
             .push_next(&mut synchronization_two_features)
             .push_next(&mut vulkan_1_1_features)
-            .push_next(&mut descriptor_indexing_features);
+            .push_next(&mut descriptor_indexing_features)
+            .push_next(&mut buffer_device_address_features);
 
         let handle = unsafe { instance.create_device_handle(&device_info, adapter.handle) };
 
         let ext = unsafe { Self::new_extensions(&instance.handle, &handle) };
 
-        let allocator = unsafe {
-            vkm::Allocator::new(vkm::AllocatorCreateInfo::new(
-                &instance.handle,
-                &handle,
-                adapter.handle(),
-            ))
-        }?;
+        let physical_device = unsafe { adapter.handle() };
+        let mut allocator_info =
+            vkm::AllocatorCreateInfo::new(&instance.handle, &handle, physical_device);
+        if info.features.buffer_device_address {
+            allocator_info.flags |= vkm::AllocatorCreateFlags::BUFFER_DEVICE_ADDRESS;
+        }
+
+        let allocator = unsafe { vkm::Allocator::new(allocator_info) }?;
 
         let new = Self {
             handle,
             instance,
             adapter,
+            features: info.features,
             ext,
             allocator: Arc::new(ManuallyDrop::new(allocator)),
         };
@@ -212,6 +266,13 @@ impl DeviceImpl {
 
     pub unsafe fn wait_idle(&self) {
         let _ = unsafe { self.handle.device_wait_idle() };
+    }
+
+    pub unsafe fn buffer_device_address(&self, buffer: vk::Buffer) -> vk::DeviceAddress {
+        unsafe {
+            self.handle
+                .get_buffer_device_address(&vk::BufferDeviceAddressInfo::default().buffer(buffer))
+        }
     }
 
     pub unsafe fn wait_fence(&self, fence: vk::Fence, timeout: Option<u64>) {

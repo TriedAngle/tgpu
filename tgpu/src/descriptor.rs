@@ -109,6 +109,13 @@ pub struct DescriptorPool {
 }
 
 #[derive(Debug, Clone)]
+pub struct DescriptorArena {
+    device: Device,
+    layout: DescriptorSetLayout,
+    pool: Arc<DescriptorPool>,
+}
+
+#[derive(Debug, Clone)]
 pub enum DescriptorWrite<'a> {
     UniformBuffer {
         binding: u32,
@@ -288,6 +295,38 @@ impl Device {
             device: layout.device.clone(),
             pool,
         }
+    }
+
+    pub fn create_descriptor_arena(
+        &self,
+        layout_info: &DescriptorSetLayoutInfo,
+        max_sets: u32,
+        pool_flags: vk::DescriptorPoolCreateFlags,
+        pool_label: Option<Label<'_>>,
+    ) -> DescriptorArena {
+        let layout = self.create_descriptor_set_layout(layout_info);
+        let pool = self.create_descriptor_pool(&DescriptorPoolInfo {
+            max_sets,
+            layouts: &[&layout],
+            flags: pool_flags,
+            label: pool_label,
+        });
+
+        DescriptorArena {
+            device: self.clone(),
+            layout,
+            pool,
+        }
+    }
+}
+
+impl DescriptorArena {
+    pub fn layout(&self) -> &DescriptorSetLayout {
+        &self.layout
+    }
+
+    pub fn allocate_set(&self) -> DescriptorSet {
+        self.device.create_descriptor_set(self.pool.clone(), &self.layout)
     }
 }
 

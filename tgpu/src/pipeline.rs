@@ -28,6 +28,9 @@ pub struct RenderPipelineInfo<'a> {
     pub fragment_shader: ShaderEntry<'a>,
     pub color_formats: &'a [vk::Format],
     pub depth_format: Option<vk::Format>,
+    pub depth_test: bool,
+    pub depth_write: bool,
+    pub depth_compare: vk::CompareOp,
     pub descriptor_layouts: &'a [&'a DescriptorSetLayout],
     pub push_constant_size: Option<u32>,
     pub blend_states: Option<&'a [vk::PipelineColorBlendAttachmentState]>,
@@ -46,6 +49,9 @@ impl Default for RenderPipelineInfo<'_> {
             fragment_shader: ShaderEntry::null(),
             color_formats: &[],
             depth_format: None,
+            depth_test: false,
+            depth_write: false,
+            depth_compare: vk::CompareOp::ALWAYS,
             descriptor_layouts: &[],
             push_constant_size: None,
             blend_states: None,
@@ -155,6 +161,13 @@ impl RenderPipelineImpl {
             .sample_shading_enable(false)
             .rasterization_samples(vk::SampleCountFlags::TYPE_1);
 
+        let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
+            .depth_test_enable(info.depth_test)
+            .depth_write_enable(info.depth_write)
+            .depth_compare_op(info.depth_compare)
+            .depth_bounds_test_enable(false)
+            .stencil_test_enable(false);
+
         let color_blend_attachment = info.blend_states.as_ref().map_or_else(
             || {
                 vec![
@@ -184,7 +197,7 @@ impl RenderPipelineImpl {
             rendering_info = rendering_info.depth_attachment_format(format);
         }
 
-        let create_info = vk::GraphicsPipelineCreateInfo::default()
+        let mut create_info = vk::GraphicsPipelineCreateInfo::default()
             .stages(&stages)
             .vertex_input_state(&vertex_input)
             .input_assembly_state(&input_assembly)
@@ -196,6 +209,10 @@ impl RenderPipelineImpl {
             .layout(layout)
             .base_pipeline_handle(vk::Pipeline::null())
             .push_next(&mut rendering_info);
+
+        if info.depth_format.is_some() || info.depth_test || info.depth_write {
+            create_info = create_info.depth_stencil_state(&depth_stencil);
+        }
 
         let handle = unsafe {
             device

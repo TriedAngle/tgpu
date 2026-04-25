@@ -10,8 +10,50 @@ pub struct Adapter {
 }
 
 #[derive(Debug, Clone, Copy, Default)]
+pub struct AdapterDescriptorIndexingFeatures {
+    pub uniform_buffer_dynamic_indexing: bool,
+    pub sampled_image_dynamic_indexing: bool,
+    pub storage_image_dynamic_indexing: bool,
+    pub storage_buffer_dynamic_indexing: bool,
+    pub partially_bound: bool,
+    pub update_unused_while_pending: bool,
+    pub uniform_buffer_update_after_bind: bool,
+    pub sampled_image_update_after_bind: bool,
+    pub storage_image_update_after_bind: bool,
+    pub storage_buffer_update_after_bind: bool,
+    pub runtime_descriptor_array: bool,
+    pub uniform_buffer_non_uniform_indexing: bool,
+    pub sampled_image_non_uniform_indexing: bool,
+    pub storage_image_non_uniform_indexing: bool,
+    pub storage_buffer_non_uniform_indexing: bool,
+}
+
+impl AdapterDescriptorIndexingFeatures {
+    pub fn supports_global_bindless(self) -> bool {
+        self.uniform_buffer_dynamic_indexing
+            && self.sampled_image_dynamic_indexing
+            && self.storage_image_dynamic_indexing
+            && self.storage_buffer_dynamic_indexing
+            && self.partially_bound
+            && self.update_unused_while_pending
+            && self.uniform_buffer_update_after_bind
+            && self.sampled_image_update_after_bind
+            && self.storage_image_update_after_bind
+            && self.storage_buffer_update_after_bind
+            && self.runtime_descriptor_array
+            && self.uniform_buffer_non_uniform_indexing
+            && self.sampled_image_non_uniform_indexing
+            && self.storage_image_non_uniform_indexing
+            && self.storage_buffer_non_uniform_indexing
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default)]
 pub struct AdapterFeatures {
     pub fill_mode_non_solid: bool,
+    pub descriptor_indexing: AdapterDescriptorIndexingFeatures,
+    pub buffer_device_address: bool,
+    pub shader_int64: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -92,6 +134,12 @@ impl AdapterInfo {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct RankedAdapter {
+    pub adapter: Adapter,
+    pub score: u64,
+}
+
 pub type RawAdapter = Arc<AdapterImpl>;
 
 #[derive(Debug)]
@@ -99,7 +147,7 @@ pub struct AdapterImpl {
     pub handle: vk::PhysicalDevice,
     pub properties: vk::PhysicalDeviceProperties,
     pub queue_properties: Arc<[vk::QueueFamilyProperties]>,
-    pub features: vk::PhysicalDeviceFeatures,
+    pub features: AdapterFeatures,
     pub formats: Arc<[(vk::Format, vk::FormatProperties)]>,
     pub info: AdapterInfo,
 }
@@ -147,9 +195,7 @@ impl AdapterImpl {
 
 impl Adapter {
     pub fn features(&self) -> AdapterFeatures {
-        AdapterFeatures {
-            fill_mode_non_solid: self.inner.features.fill_mode_non_solid == vk::TRUE,
-        }
+        self.inner.features
     }
 
     pub fn info(&self) -> &AdapterInfo {

@@ -4,7 +4,7 @@ use std::borrow::Cow;
 use std::ffi;
 use std::sync::Arc;
 
-use crate::{Adapter, GPUError};
+use crate::{Adapter, AdapterDescriptorIndexingFeatures, AdapterFeatures, GPUError, RankedAdapter};
 
 pub struct Instance {
     pub(crate) inner: RawInstance,
@@ -73,6 +73,31 @@ impl Instance {
         Ok(adapters.into_iter().map(|inner| Adapter {
             inner: Arc::new(inner),
         }))
+    }
+
+    pub fn rank_adapters(&self, formats: &[vk::Format]) -> Result<Vec<RankedAdapter>, GPUError> {
+        let mut adapters = self.adapters(formats)?.collect::<Vec<_>>();
+        adapters.sort_by(|left, right| {
+            right
+                .default_score()
+                .cmp(&left.default_score())
+                .then_with(|| left.info().name.cmp(&right.info().name))
+        });
+
+        Ok(adapters
+            .into_iter()
+            .map(|adapter| RankedAdapter {
+                score: adapter.default_score(),
+                adapter,
+            })
+            .collect())
+    }
+
+    pub fn default_adapter(
+        &self,
+        formats: &[vk::Format],
+    ) -> Result<Option<RankedAdapter>, GPUError> {
+        Ok(self.rank_adapters(formats)?.into_iter().next())
     }
 
     fn get_required_extensions_and_flags(
@@ -227,8 +252,85 @@ impl InstanceImpl {
         unsafe { self.handle.get_physical_device_properties(pdev) }
     }
 
-    pub unsafe fn features(&self, pdev: vk::PhysicalDevice) -> vk::PhysicalDeviceFeatures {
-        unsafe { self.handle.get_physical_device_features(pdev) }
+    pub unsafe fn features(&self, pdev: vk::PhysicalDevice) -> AdapterFeatures {
+        let (fill_mode_non_solid, descriptor_indexing, buffer_device_address, shader_int64) = {
+            let mut descriptor_indexing_features =
+                vk::PhysicalDeviceDescriptorIndexingFeatures::default();
+            let mut buffer_device_address_features =
+                vk::PhysicalDeviceBufferDeviceAddressFeatures::default();
+            let mut features2 = vk::PhysicalDeviceFeatures2::default()
+                .push_next(&mut descriptor_indexing_features)
+                .push_next(&mut buffer_device_address_features);
+
+            unsafe { self.handle.get_physical_device_features2(pdev, &mut features2) };
+
+            let base_features = features2.features;
+            let fill_mode_non_solid = base_features.fill_mode_non_solid == vk::TRUE;
+            let uniform_buffer_dynamic_indexing =
+                base_features.shader_uniform_buffer_array_dynamic_indexing == vk::TRUE;
+            let sampled_image_dynamic_indexing =
+                base_features.shader_sampled_image_array_dynamic_indexing == vk::TRUE;
+            let storage_image_dynamic_indexing =
+                base_features.shader_storage_image_array_dynamic_indexing == vk::TRUE;
+            let storage_buffer_dynamic_indexing =
+                base_features.shader_storage_buffer_array_dynamic_indexing == vk::TRUE;
+            let shader_int64 = base_features.shader_int64 == vk::TRUE;
+            let _ = features2;
+
+            let descriptor_indexing = AdapterDescriptorIndexingFeatures {
+                uniform_buffer_dynamic_indexing,
+                sampled_image_dynamic_indexing,
+                storage_image_dynamic_indexing,
+                storage_buffer_dynamic_indexing,
+                partially_bound: descriptor_indexing_features.descriptor_binding_partially_bound
+                    == vk::TRUE,
+                update_unused_while_pending: descriptor_indexing_features
+                    .descriptor_binding_update_unused_while_pending
+                    == vk::TRUE,
+                uniform_buffer_update_after_bind: descriptor_indexing_features
+                    .descriptor_binding_uniform_buffer_update_after_bind
+                    == vk::TRUE,
+                sampled_image_update_after_bind: descriptor_indexing_features
+                    .descriptor_binding_sampled_image_update_after_bind
+                    == vk::TRUE,
+                storage_image_update_after_bind: descriptor_indexing_features
+                    .descriptor_binding_storage_image_update_after_bind
+                    == vk::TRUE,
+                storage_buffer_update_after_bind: descriptor_indexing_features
+                    .descriptor_binding_storage_buffer_update_after_bind
+                    == vk::TRUE,
+                runtime_descriptor_array: descriptor_indexing_features.runtime_descriptor_array
+                    == vk::TRUE,
+                uniform_buffer_non_uniform_indexing: descriptor_indexing_features
+                    .shader_uniform_buffer_array_non_uniform_indexing
+                    == vk::TRUE,
+                sampled_image_non_uniform_indexing: descriptor_indexing_features
+                    .shader_sampled_image_array_non_uniform_indexing
+                    == vk::TRUE,
+                storage_image_non_uniform_indexing: descriptor_indexing_features
+                    .shader_storage_image_array_non_uniform_indexing
+                    == vk::TRUE,
+                storage_buffer_non_uniform_indexing: descriptor_indexing_features
+                    .shader_storage_buffer_array_non_uniform_indexing
+                    == vk::TRUE,
+            };
+
+            let buffer_device_address = buffer_device_address_features.buffer_device_address == vk::TRUE;
+
+            (
+                fill_mode_non_solid,
+                descriptor_indexing,
+                buffer_device_address,
+                shader_int64,
+            )
+        };
+
+        AdapterFeatures {
+            fill_mode_non_solid,
+            descriptor_indexing,
+            buffer_device_address,
+            shader_int64,
+        }
     }
 
     pub unsafe fn queue_properties(
