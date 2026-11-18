@@ -136,3 +136,37 @@ float4 fragmentMainColor(VertexOutput input) : SV_Target0 {
 float4 fragmentMainTextured(VertexOutput input) : SV_Target0 {
     return shade_fragment(input, true);
 }
+
+// Fullscreen pass used by the native port to display the G-buffer, which the
+// Rust example shows through egui.
+struct PresentOutput {
+    float4 position : SV_Position;
+    float2 uv : TEXCOORD0;
+};
+
+[shader("vertex")]
+PresentOutput presentVertex(uint vertex_id : SV_VertexID) {
+    float2 corner = float2((vertex_id << 1) & 2, vertex_id & 2);
+    PresentOutput output;
+    output.position = float4(corner * 2.0 - 1.0, 0.0, 1.0);
+    output.uv = corner;
+    return output;
+}
+
+float3 linear_from_gamma_rgb(float3 srgb) {
+    float3 cutoff = srgb < float3(0.04045, 0.04045, 0.04045);
+    float3 lower = srgb / 12.92;
+    float3 higher = pow((srgb + 0.055) / 1.055, 2.4);
+    return lerp(higher, lower, cutoff);
+}
+
+[shader("fragment")]
+float4 presentFragment(PresentOutput input) : SV_Target0 {
+    // The G-buffer holds gamma-encoded colour and the swapchain is sRGB, so
+    // convert to linear in the shader (like egui's linear pipeline does).
+    float4 color = sampled_images[pc.texture_image].Sample(
+        samplers[pc.texture_sampler],
+        input.uv
+    );
+    return float4(linear_from_gamma_rgb(color.rgb), color.a);
+}

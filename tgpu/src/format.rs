@@ -3,17 +3,6 @@ use ash::vk;
 use crate::macros::vk_value_enum;
 
 vk_value_enum! {
-    /// A pixel format.
-    ///
-    /// Names follow wgpu's `TextureFormat` conventions rather than Vulkan's:
-    /// channels are grouped and camel-cased (`R8G8B8A8_SRGB` is
-    /// [`Format::Rgba8UnormSrgb`]), floats are `Float`/`Ufloat`, packed formats
-    /// carry a `Pack16`/`Pack32` suffix, and depth/stencil formats are
-    /// `Depth*`/`Stencil*`.
-    ///
-    /// Covers the core uncompressed `VkFormat` values. Compressed formats
-    /// (BC/ASTC/ETC2) and vendor formats are reachable through
-    /// [`Format::Custom`], or simply by converting from [`vk::Format`].
     Format: vk::Format,
     default = UNDEFINED => UNDEFINED,
     {

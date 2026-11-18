@@ -1,4 +1,4 @@
-use rand::Rng;
+use rand::RngExt;
 use raw_window_handle::HasDisplayHandle;
 
 use winit::{

@@ -4,7 +4,7 @@ use std::sync::{Arc, atomic::AtomicI32};
 
 use crate::{
     CommandBuffer, CommandRecorder, Device, Extent2D, Format, GPUError, Image, ImageLayout,
-    ImageLayoutTransition, ImageView, PipelineStageFlags, Queue, Semaphore, SubmitInfo,
+    ImageLayoutTransition, ImageView, PipelineStageFlags2, Queue, Semaphore, SubmitInfo,
     SurfaceFormat,
     macros::vk_value_enum,
     raw::{DeviceImpl, ImageImpl, ImageViewImpl, QueueImpl, RawAdapter, RawDevice, SemaphoreImpl},
@@ -699,7 +699,7 @@ impl Swapchain {
 
         let value = queue.submit(SubmitInfo {
             records,
-            wait_binary: &[(available, PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)],
+            wait_binary: &[(available, PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)],
             signal_binary: &[finished],
             ..Default::default()
         });

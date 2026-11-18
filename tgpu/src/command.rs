@@ -35,39 +35,6 @@ impl From<IndexType> for vk::IndexType {
     }
 }
 
-bitflags::bitflags! {
-    /// A subset of the legacy `VkPipelineStageFlags` bits used for submission
-    /// dependencies. Use [`PipelineStageFlags::from_bits_retain`] for anything
-    /// not named here.
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-    pub struct PipelineStageFlags: u32 {
-        const TOP_OF_PIPE = 1 << 0;
-        const DRAW_INDIRECT = 1 << 1;
-        const VERTEX_INPUT = 1 << 2;
-        const EARLY_FRAGMENT_TESTS = 1 << 3;
-        const LATE_FRAGMENT_TESTS = 1 << 4;
-        const FRAGMENT_SHADER = 1 << 7;
-        const COLOR_ATTACHMENT_OUTPUT = 1 << 8;
-        const COMPUTE_SHADER = 1 << 11;
-        const TRANSFER = 1 << 12;
-        const BOTTOM_OF_PIPE = 1 << 13;
-        const ALL_GRAPHICS = 1 << 15;
-        const ALL_COMMANDS = 1 << 16;
-    }
-}
-
-impl From<PipelineStageFlags> for vk::PipelineStageFlags {
-    fn from(value: PipelineStageFlags) -> Self {
-        Self::from_raw(value.bits())
-    }
-}
-
-impl From<vk::PipelineStageFlags> for PipelineStageFlags {
-    fn from(value: vk::PipelineStageFlags) -> Self {
-        Self::from_bits_retain(value.as_raw())
-    }
-}
-
 #[derive(Debug)]
 pub struct CommandPools {
     pub device: RawDevice,
@@ -364,6 +331,24 @@ impl CommandRecorder {
         unsafe { inner.end_rendering() };
     }
 
+    /// Begins a render pass without a closure scope.
+    ///
+    /// Only render commands ([`RenderRecorder`] equivalents such as
+    /// [`CommandRecorder::draw`], [`CommandRecorder::bind_render_bytes`] and
+    /// [`CommandRecorder::viewport`]) may be recorded until
+    /// [`CommandRecorder::end_render_pass`]. Prefer [`CommandRecorder::begin_render`]
+    /// from Rust; this exists for bindings that cannot pass closures.
+    pub fn begin_render_pass(&mut self, info: &RenderInfo<'_>) {
+        let inner = unsafe { &mut *self.inner.get() };
+        unsafe { inner.begin_render(info) };
+    }
+
+    /// Ends a render pass started with [`CommandRecorder::begin_render_pass`].
+    pub fn end_render_pass(&mut self) {
+        let inner = unsafe { &mut *self.inner.get() };
+        unsafe { inner.end_rendering() };
+    }
+
     pub fn copy_image(&mut self, info: &CopyImageInfo<'_>) {
         let inner = unsafe { &mut *self.inner.get() };
         unsafe { inner.copy_image(info) };
@@ -398,9 +383,14 @@ impl CommandRecorder {
     }
 
     pub fn push_compute_constants<T: bytemuck::Pod>(&mut self, pipeline: &ComputePipeline, pc: T) {
+        self.push_compute_constants_bytes(pipeline, bytemuck::bytes_of(&pc));
+    }
+
+    /// [`CommandRecorder::push_compute_constants`] for a raw byte slice.
+    pub fn push_compute_constants_bytes(&mut self, pipeline: &ComputePipeline, pc: &[u8]) {
         let inner = unsafe { &mut *self.inner.get() };
         unsafe {
-            inner.push_compute_constants(&pipeline.inner, pc);
+            inner.push_compute_constants_bytes(&pipeline.inner, pc);
         }
     }
 
@@ -412,9 +402,19 @@ impl CommandRecorder {
         set: &DescriptorSet,
         push_constants: T,
     ) {
+        self.bind_compute_bytes(pipeline, set, bytemuck::bytes_of(&push_constants));
+    }
+
+    /// [`CommandRecorder::bind_compute`] for raw push-constant bytes.
+    pub fn bind_compute_bytes(
+        &mut self,
+        pipeline: &ComputePipeline,
+        set: &DescriptorSet,
+        push_constants: &[u8],
+    ) {
         self.bind_compute_pipeline(pipeline);
         self.bind_compute_descriptor_set(set, pipeline, 0, &[]);
-        self.push_compute_constants(pipeline, push_constants);
+        self.push_compute_constants_bytes(pipeline, push_constants);
     }
 
     pub fn bind_render_descriptor_set(
@@ -431,9 +431,14 @@ impl CommandRecorder {
     }
 
     pub fn push_render_constants<T: bytemuck::Pod>(&mut self, pipeline: &RenderPipeline, pc: T) {
+        self.push_render_constants_bytes(pipeline, bytemuck::bytes_of(&pc));
+    }
+
+    /// [`CommandRecorder::push_render_constants`] for a raw byte slice.
+    pub fn push_render_constants_bytes(&mut self, pipeline: &RenderPipeline, pc: &[u8]) {
         let inner = unsafe { &mut *self.inner.get() };
         unsafe {
-            inner.push_render_constants(&pipeline.inner, pc);
+            inner.push_render_constants_bytes(&pipeline.inner, pc);
         }
     }
 
@@ -445,14 +450,39 @@ impl CommandRecorder {
         set: &DescriptorSet,
         push_constants: T,
     ) {
+        self.bind_render_bytes(pipeline, set, bytemuck::bytes_of(&push_constants));
+    }
+
+    /// [`CommandRecorder::bind_render`] for raw push-constant bytes.
+    pub fn bind_render_bytes(
+        &mut self,
+        pipeline: &RenderPipeline,
+        set: &DescriptorSet,
+        push_constants: &[u8],
+    ) {
         self.bind_render_pipeline(pipeline);
         self.bind_render_descriptor_set(set, pipeline, 0, &[]);
-        self.push_render_constants(pipeline, push_constants);
+        self.push_render_constants_bytes(pipeline, push_constants);
     }
 
     pub fn dispatch(&mut self, x: u32, y: u32, z: u32) {
         let inner = unsafe { &mut *self.inner.get() };
         unsafe { inner.dispatch(x, y, z) };
+    }
+
+    /// Records a draw. Only valid between [`CommandRecorder::begin_render_pass`]
+    /// and [`CommandRecorder::end_render_pass`].
+    pub fn draw(&mut self, vertex: ops::Range<u32>, instance: ops::Range<u32>) {
+        let inner = unsafe { &mut *self.inner.get() };
+        unsafe { inner.draw(vertex, instance) };
+    }
+
+    /// Binds a vertex buffer. Only valid between
+    /// [`CommandRecorder::begin_render_pass`] and
+    /// [`CommandRecorder::end_render_pass`].
+    pub fn bind_vertex_buffer(&mut self, slot: u32, buffer: &Buffer, offset: vk::DeviceSize) {
+        let inner = unsafe { &mut *self.inner.get() };
+        unsafe { inner.bind_vertex_buffer(slot, buffer, offset) };
     }
 }
 
@@ -511,9 +541,14 @@ impl<'a> RenderRecorder<'a> {
     }
 
     pub fn push_render_constants<T: bytemuck::Pod>(&mut self, pipeline: &RenderPipeline, pc: T) {
+        self.push_render_constants_bytes(pipeline, bytemuck::bytes_of(&pc));
+    }
+
+    /// [`RenderRecorder::push_render_constants`] for a raw byte slice.
+    pub fn push_render_constants_bytes(&mut self, pipeline: &RenderPipeline, pc: &[u8]) {
         let inner = unsafe { &mut *self.command_recorder.inner.get() };
         unsafe {
-            inner.push_render_constants(&pipeline.inner, pc);
+            inner.push_render_constants_bytes(&pipeline.inner, pc);
         }
     }
 
@@ -975,10 +1010,10 @@ impl CommandRecorderImpl {
         }
     }
 
-    pub unsafe fn push_compute_constants<T: bytemuck::Pod>(
+    pub unsafe fn push_compute_constants_bytes(
         &mut self,
         pipeline: &ComputePipelineImpl,
-        pc: T,
+        pc: &[u8],
     ) {
         unsafe {
             self.device.handle.cmd_push_constants(
@@ -986,7 +1021,7 @@ impl CommandRecorderImpl {
                 pipeline.layout,
                 vk::ShaderStageFlags::COMPUTE,
                 0,
-                bytemuck::cast_slice(&[pc]),
+                pc,
             );
         }
     }
@@ -1010,10 +1045,10 @@ impl CommandRecorderImpl {
         }
     }
 
-    pub unsafe fn push_render_constants<T: bytemuck::Pod>(
+    pub unsafe fn push_render_constants_bytes(
         &mut self,
         pipeline: &RenderPipelineImpl,
-        pc: T,
+        pc: &[u8],
     ) {
         unsafe {
             self.device.handle.cmd_push_constants(
@@ -1021,7 +1056,7 @@ impl CommandRecorderImpl {
                 pipeline.layout,
                 vk::ShaderStageFlags::VERTEX | vk::ShaderStageFlags::FRAGMENT,
                 0,
-                bytemuck::cast_slice(&[pc]),
+                pc,
             );
         }
     }
@@ -1036,8 +1071,8 @@ impl CommandRecorderImpl {
 #[derive(Debug, Default)]
 pub struct SubmitInfo<'a> {
     pub records: &'a [CommandBuffer],
-    pub wait_binary: &'a [(&'a Semaphore, PipelineStageFlags)],
-    pub wait_timeline: &'a [(&'a Semaphore, u64, PipelineStageFlags)],
+    pub wait_binary: &'a [(&'a Semaphore, vk::PipelineStageFlags2)],
+    pub wait_timeline: &'a [(&'a Semaphore, u64, vk::PipelineStageFlags2)],
     pub signal_binary: &'a [&'a Semaphore],
     pub signal_timeline: &'a [(&'a Semaphore, u64)],
 }
@@ -1090,13 +1125,13 @@ impl Queue {
         let wait_binary = info
             .wait_binary
             .iter()
-            .map(|(s, f)| (s.inner.handle, (*f).into()))
+            .map(|(s, f)| (s.inner.handle, *f))
             .collect::<Vec<_>>();
 
         let wait_timeline = info
             .wait_timeline
             .iter()
-            .map(|(s, v, f)| (s.inner.handle, *v, (*f).into()))
+            .map(|(s, v, f)| (s.inner.handle, *v, *f))
             .collect::<Vec<_>>();
 
         let signal_binary = info
@@ -1131,66 +1166,69 @@ impl QueueImpl {
         submission_index: u64,
         timeline: Semaphore,
         command_buffers: &[CommandBufferImpl],
-        wait_binary: &[(vk::Semaphore, vk::PipelineStageFlags)],
-        wait_timeline: &[(vk::Semaphore, u64, vk::PipelineStageFlags)],
+        wait_binary: &[(vk::Semaphore, vk::PipelineStageFlags2)],
+        wait_timeline: &[(vk::Semaphore, u64, vk::PipelineStageFlags2)],
         signal_binary: &[vk::Semaphore],
         signal_timeline: &[(vk::Semaphore, u64)],
     ) -> Result<u64, GPUError> {
-        let submit_buffers = command_buffers
+        let command_infos = command_buffers
             .iter()
-            .map(|b| {
-                b.submission.store(submission_index, Ordering::Relaxed);
-                b.handle
+            .map(|buffer| {
+                buffer.submission.store(submission_index, Ordering::Relaxed);
+                vk::CommandBufferSubmitInfo::default().command_buffer(buffer.handle)
             })
             .collect::<Vec<_>>();
 
-        let mut signal_timeline = signal_timeline.to_vec();
-        signal_timeline.push((timeline.inner.handle, submission_index));
-
-        let mut wait_semaphores = Vec::with_capacity(wait_binary.len() + wait_timeline.len());
-        let mut wait_stages = Vec::with_capacity(wait_binary.len() + wait_timeline.len());
-        let mut wait_values = Vec::with_capacity(wait_timeline.len());
-
-        for &(sem, stage) in wait_binary {
-            wait_semaphores.push(sem);
-            wait_stages.push(stage);
-            wait_values.push(0);
+        let mut wait_infos = Vec::with_capacity(wait_binary.len() + wait_timeline.len());
+        for &(semaphore, stage) in wait_binary {
+            wait_infos.push(
+                vk::SemaphoreSubmitInfo::default()
+                    .semaphore(semaphore)
+                    .stage_mask(stage),
+            );
+        }
+        for &(semaphore, value, stage) in wait_timeline {
+            wait_infos.push(
+                vk::SemaphoreSubmitInfo::default()
+                    .semaphore(semaphore)
+                    .value(value)
+                    .stage_mask(stage),
+            );
         }
 
-        for &(sem, value, stage) in wait_timeline {
-            wait_semaphores.push(sem);
-            wait_stages.push(stage);
-            wait_values.push(value);
+        let mut signal_infos = Vec::with_capacity(signal_binary.len() + signal_timeline.len() + 1);
+        for &semaphore in signal_binary {
+            signal_infos.push(
+                vk::SemaphoreSubmitInfo::default()
+                    .semaphore(semaphore)
+                    .stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS),
+            );
         }
-
-        let mut signal_semaphores = Vec::with_capacity(signal_binary.len() + signal_timeline.len());
-        let mut signal_values = Vec::with_capacity(signal_timeline.len());
-
-        for &sem in signal_binary {
-            signal_semaphores.push(sem);
-            signal_values.push(0);
+        for &(semaphore, value) in signal_timeline {
+            signal_infos.push(
+                vk::SemaphoreSubmitInfo::default()
+                    .semaphore(semaphore)
+                    .value(value)
+                    .stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS),
+            );
         }
+        signal_infos.push(
+            vk::SemaphoreSubmitInfo::default()
+                .semaphore(timeline.inner.handle)
+                .value(submission_index)
+                .stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS),
+        );
 
-        for &(sem, value) in &signal_timeline {
-            signal_semaphores.push(sem);
-            signal_values.push(value);
-        }
-
-        let mut timeline_info = vk::TimelineSemaphoreSubmitInfo::default()
-            .wait_semaphore_values(&wait_values)
-            .signal_semaphore_values(&signal_values);
-
-        let submit_info = vk::SubmitInfo::default()
-            .wait_semaphores(&wait_semaphores)
-            .wait_dst_stage_mask(&wait_stages)
-            .command_buffers(&submit_buffers)
-            .signal_semaphores(&signal_semaphores)
-            .push_next(&mut timeline_info);
+        let submit_info = vk::SubmitInfo2::default()
+            .command_buffer_infos(&command_infos)
+            .wait_semaphore_infos(&wait_infos)
+            .signal_semaphore_infos(&signal_infos);
 
         unsafe {
             self.device
-                .handle
-                .queue_submit(self.handle, &[submit_info], vk::Fence::null())?;
+                .ext
+                .sync2
+                .queue_submit2(self.handle, &[submit_info], vk::Fence::null())?;
         }
 
         Ok(submission_index)

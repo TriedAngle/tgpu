@@ -1,0 +1,14 @@
+language = "C"
+include_guard = "TGPU_H"
+cpp_compat = true
+documentation = true
+tab_width = 4
+style = "type"
+usize_is_size_t = true
+
+[enum]
+prefix_with_name = true
+rename_variants = "ScreamingSnakeCase"
+
+[const]
+allow_static_const = true

@@ -24,7 +24,7 @@ struct PushConstants {
     screen_size: vec2<f32>,
 };
 
-var<push_constant> pc: PushConstants;
+var<immediate> pc: PushConstants;
 
 struct VertexOutput {
     @location(0) tex_coord: vec2<f32>,
@@ -434,7 +434,7 @@ impl Renderer {
         run_ui: F,
     ) -> Result<Frame<'a>, Error>
     where
-        F: FnOnce(&egui_crate::Context),
+        F: FnOnce(&mut egui_crate::Ui),
     {
         if flight_index >= self.frames.len() {
             return Err(Error::Validation(format!(
@@ -455,23 +455,27 @@ impl Renderer {
         egui_winit::update_viewport_info(viewport, &self.context, window, self.first_frame);
 
         let raw_input = self.state.take_egui_input(window);
-        self.context.begin_pass(raw_input);
-        run_ui(&self.context);
+        let mut run_ui = Some(run_ui);
         let egui_crate::FullOutput {
             platform_output,
-            textures_delta,
+            mut textures_delta,
             shapes,
             pixels_per_point,
             viewport_output: _,
-        } = self.context.end_pass();
+        } = self.context.run_ui(raw_input, |ui| {
+            if let Some(run_ui) = run_ui.take() {
+                run_ui(ui);
+            }
+        });
         self.first_frame = false;
 
         let paint_jobs = self.context.tessellate(shapes, pixels_per_point);
         self.state.handle_platform_output(window, platform_output);
 
-        self.process_texture_deltas(flight_index, &textures_delta.set)?;
+        self.process_texture_deltas(flight_index, &textures_delta)?;
         self.build_frame_resources(flight_index, &paint_jobs)?;
-        self.pending_texture_frees.extend(textures_delta.free);
+        self.pending_texture_frees.extend(textures_delta.free.iter().copied());
+        textures_delta.clear();
 
         Ok(Frame {
             renderer: self,
@@ -503,17 +507,20 @@ impl Renderer {
     fn process_texture_deltas(
         &mut self,
         flight_index: usize,
-        deltas: &[(TextureId, epaint::ImageDelta)],
+        deltas: &egui_crate::TexturesDelta,
     ) -> Result<(), Error> {
-        if self.pending_texture_frees.is_empty() && deltas.is_empty() {
+        if self.pending_texture_frees.is_empty() && deltas.set.is_empty() {
             return Ok(());
         }
 
         self.device.wait_idle();
         self.flush_pending_texture_frees();
 
-        for (id, delta) in deltas {
-            self.apply_texture_delta(flight_index, *id, delta)?;
+        // A texture can be updated more than once per frame; apply in order.
+        for (id, patches) in &deltas.set {
+            for delta in patches {
+                self.apply_texture_delta(flight_index, *id, delta)?;
+            }
         }
 
         Ok(())

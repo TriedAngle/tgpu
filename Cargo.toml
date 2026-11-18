@@ -1,17 +1,20 @@
 [workspace]
 resolver = "3"
-members = ["examples/matmul", "examples/minimal_latest", "examples/particles", "examples/simple_buffer_triangle", "examples/triangle", "tgpu"] 
+members = ["examples/matmul", "examples/minimal_latest", "examples/particles", "examples/simple_buffer_triangle", "examples/triangle", "tgpu", "tgpu-native"] 
 
 [workspace.dependencies]
 ash = { version = "0.38", features = [ "debug", "loaded", "std" ] }
 ash-window = "0.13.0"
 raw-window-handle = "0.6.2"
-vk-mem = "0.4.0"
-naga = { version = "25.0.1", features = [ "wgsl-in", "spv-out" ] }
-parking_lot = "0.12.3"
+vk-mem = "0.5.0"
+naga = { version = "30.0.2", features = [ "wgsl-in", "spv-out" ] }
+parking_lot = "0.13.0"
 winit = { version = "0.30.5" }
 log = "0.4.27"
 bitflags = "2.9.0"
 bytemuck =  { version = "1.22.0", features = [ "derive" ] }
-egui = { version = "0.33", features = ["bytemuck"] }
-egui-winit = "0.33"
+egui = { version = "0.37", features = ["bytemuck", "default_fonts"] }
+egui-winit = "0.37"
+env_logger = "0.11.11"
+rand = "0.10.4"
+image = { version = "0.25.10", default-features = false, features = [ "jpeg" ] }

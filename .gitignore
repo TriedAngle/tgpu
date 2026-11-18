@@ -5,3 +5,9 @@ Cargo.lock
 
 **/*.rs.bk
 **/*.spv
+**/*.o
+**/*.dSYM
+**/particles
+**/minimal
+
+.DS_Store

@@ -319,9 +319,9 @@ impl Render {
         let fps = 1.0 / self.delta_time;
         let gbuffer_texture = self.gbuffer_texture;
 
-        let mut egui_frame = self.egui.run(&self.window, ring, |ctx| {
+        let mut egui_frame = self.egui.run(&self.window, ring, |ui| {
             build_ui(
-                ctx,
+                ui,
                 gbuffer_texture,
                 &mut image_id,
                 &mut clear_color,
@@ -521,7 +521,7 @@ impl Render {
             records: &[recorder.finish()],
             wait_binary: &[(
                 available_semaphore,
-                tgpu::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                tgpu::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
             )],
             signal_binary: &[finished_semaphore],
             ..Default::default()
@@ -812,7 +812,7 @@ fn vertex_input_access() -> tgpu::BufferAccessTransition {
 }
 
 fn build_ui(
-    ctx: &egui::Context,
+    ui: &mut egui::Ui,
     texture: egui::TextureId,
     image_id: &mut usize,
     clear_color: &mut [f32; 4],
@@ -822,7 +822,7 @@ fn build_ui(
     viewport_size: &mut tgpu::Extent2D,
     fps: f32,
 ) {
-    egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
+    egui::Panel::top("menu_bar").show(ui, |ui| {
         egui::MenuBar::new().ui(ui, |ui| {
             ui.menu_button("File", |ui| {
                 if ui.checkbox(v_sync, "vSync").changed() {
@@ -837,9 +837,9 @@ fn build_ui(
         });
     });
 
-    egui::SidePanel::left("Settings")
-        .default_width(230.0)
-        .show(ctx, |ui| {
+    egui::Panel::left("Settings")
+        .default_size(230.0)
+        .show(ui, |ui| {
             ui.radio_value(image_id, 0, "Image 1");
             ui.radio_value(image_id, 1, "Image 2");
             ui.separator();
@@ -861,7 +861,7 @@ fn build_ui(
             }
         });
 
-    egui::CentralPanel::default().show(ctx, |ui| {
+    egui::CentralPanel::default().show(ui, |ui| {
         let available = ui.available_size().max(egui::vec2(1.0, 1.0));
         *viewport_size = tgpu::Extent2D::new(
             available.x.round().max(1.0) as u32,

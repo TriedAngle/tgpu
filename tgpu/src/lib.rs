@@ -46,7 +46,7 @@ pub use adapter::{
 };
 pub use allocations::Allocation;
 pub use ash;
-pub use ash::vk::{QueueFlags, ShaderStageFlags};
+pub use ash::vk::{PipelineStageFlags2, QueueFlags, ShaderStageFlags};
 pub use bindless::{
     BINDLESS_READ_BUFFER_BINDING, BINDLESS_RW_BUFFER_BINDING, BINDLESS_SAMPLED_IMAGE_BINDING,
     BINDLESS_SAMPLER_BINDING, BINDLESS_STORAGE_IMAGE_BINDING, BINDLESS_UNIFORM_BUFFER_BINDING,
@@ -58,7 +58,7 @@ pub use buffer::{
 };
 pub use command::{
     AttachmentLoadOp, AttachmentStoreOp, ClearValue, CommandBuffer, CommandPools, CommandRecorder,
-    IndexType, PipelineStageFlags, RenderAttachment, RenderInfo, RenderRecorder, SubmitInfo,
+    IndexType, RenderAttachment, RenderInfo, RenderRecorder, SubmitInfo,
     ThreadCommandPool,
 };
 pub use debug::Label;

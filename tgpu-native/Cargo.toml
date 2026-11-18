@@ -1,0 +1,13 @@
+[package]
+name = "tgpu-native"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+name = "tgpu_native"
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+tgpu = { version = "*", path = "../tgpu" }
+raw-window-handle = { workspace = true }

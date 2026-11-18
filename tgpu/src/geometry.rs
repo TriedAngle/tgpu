@@ -1,5 +1,6 @@
 use ash::vk;
 
+#[repr(C)]
 #[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
 pub struct Extent2D {
     pub width: u32,
@@ -62,6 +63,7 @@ impl From<Extent2D> for vk::Extent2D {
     }
 }
 
+#[repr(C)]
 #[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
 pub struct Extent3D {
     pub width: u32,
@@ -132,6 +134,7 @@ impl From<Extent3D> for vk::Extent3D {
     }
 }
 
+#[repr(C)]
 #[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
 pub struct Offset {
     pub x: i32,
@@ -182,6 +185,7 @@ impl From<Offset> for vk::Offset2D {
     }
 }
 
+#[repr(C)]
 #[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
 pub struct Offset3D {
     pub x: i32,
@@ -237,6 +241,7 @@ impl From<Offset3D> for vk::Offset3D {
     }
 }
 
+#[repr(C)]
 #[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
 pub struct Rect {
     pub offset: Offset,
@@ -274,6 +279,7 @@ impl From<Rect> for vk::Rect2D {
     }
 }
 
+#[repr(C)]
 #[derive(Debug, Copy, Clone, Default, PartialEq)]
 pub struct Viewport {
     pub x: f32,

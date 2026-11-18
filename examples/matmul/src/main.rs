@@ -1,4 +1,4 @@
-use rand::Rng;
+use rand::RngExt;
 
 const SHADER: &str = include_str!("./shader.slang");
 
