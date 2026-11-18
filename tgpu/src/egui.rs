@@ -6,13 +6,14 @@ use ::egui_winit::winit::{event::WindowEvent, window::Window};
 use ash::vk;
 
 use crate::{
-    Buffer, BufferAccessTransition, BufferDesc, BufferUses, ColorAttachmentDesc, CommandRecorder,
-    CopyBufferToImageInfo, DescriptorBinding, DescriptorPool, DescriptorPoolInfo, DescriptorSet,
+    Buffer, BufferDesc, BufferImageCopy, BufferUses, CommandRecorder, CopyBufferToImageInfo,
+    CullMode, DescriptorBinding, DescriptorPool, DescriptorPoolInfo, DescriptorSet,
     DescriptorSetLayout, DescriptorSetLayoutInfo, DescriptorType, DescriptorWrite, Device,
-    GPUError, HostAccess, ImageAccess, ImageDesc, ImageLayout, ImageLayoutTransition,
-    ImageTransition, ImageUses, ImportedBufferDesc, ImportedImageDesc, Label, MemoryPreset,
-    RenderGraph, RenderPipeline, RenderPipelineInfo, RenderRecorder, SamplerCreateInfo,
-    ShaderSource, ShaderStageFlags, Swapchain, ViewImage, ViewImageDesc,
+    Extent2D, Extent3D, Filter, Format, FrontFace, GPUError, HostAccess, ImageAspect, ImageDesc,
+    ImageLayout, ImageLayoutTransition, ImageSubresourceLayers, ImageTransition, ImageUses, Label,
+    MemoryPreset, Offset3D, PolygonMode, PrimitiveTopology, Rect, RenderPipeline,
+    RenderPipelineInfo, RenderRecorder, SamplerAddressMode, SamplerCreateInfo, SamplerMipmapMode,
+    ShaderSource, ShaderStageFlags, Swapchain, ViewImage, ViewImageDesc, Viewport,
 };
 
 pub use ::egui;
@@ -110,7 +111,7 @@ impl From<GPUError> for Error {
 #[derive(Debug, Clone)]
 pub struct RendererCreateInfo<'a> {
     pub label: Option<Label<'a>>,
-    pub color_format: vk::Format,
+    pub color_format: Format,
     pub max_frames_in_flight: usize,
     pub max_textures: u32,
 }
@@ -119,7 +120,7 @@ impl Default for RendererCreateInfo<'_> {
     fn default() -> Self {
         Self {
             label: Some(Label::Name("egui")),
-            color_format: vk::Format::B8G8R8A8_SRGB,
+            color_format: Format::B8G8R8A8_SRGB,
             max_frames_in_flight: 3,
             max_textures: 1024,
         }
@@ -141,7 +142,7 @@ enum TextureKind {
 struct TextureBinding {
     image: ViewImage,
     descriptor_set: DescriptorSet,
-    extent: vk::Extent3D,
+    extent: Extent3D,
     kind: TextureKind,
     initialized: bool,
     options: Option<epaint::textures::TextureOptions>,
@@ -150,7 +151,7 @@ struct TextureBinding {
 struct TextureUpload {
     texture_id: TextureId,
     buffer: Buffer,
-    regions: Vec<vk::BufferImageCopy>,
+    regions: Vec<BufferImageCopy>,
 }
 
 #[derive(Clone)]
@@ -197,13 +198,6 @@ pub struct Frame<'a> {
     renderer: &'a mut Renderer,
     flight_index: usize,
     pixels_per_point: f32,
-}
-
-#[derive(Clone, Copy)]
-struct GraphUpload<'a> {
-    buffer: crate::GraphBuffer,
-    image: crate::GraphImage,
-    regions: &'a [vk::BufferImageCopy],
 }
 
 #[derive(Clone)]
@@ -305,7 +299,7 @@ impl Renderer {
             .alpha_blend_op(vk::BlendOp::ADD)
             .color_write_mask(vk::ColorComponentFlags::RGBA)];
 
-        let fragment_entry = if is_srgb_format(info.color_format) {
+        let fragment_entry = if info.color_format.is_srgb() {
             "fs_main_linear"
         } else {
             "fs_main_gamma"
@@ -320,10 +314,10 @@ impl Renderer {
             push_constant_size: Some(std::mem::size_of::<PushConstants>() as u32),
             blend_states: Some(&blend_state),
             vertex_input_state: Some(vertex_input),
-            topology: vk::PrimitiveTopology::TRIANGLE_LIST,
-            polygon: vk::PolygonMode::FILL,
-            cull: vk::CullModeFlags::NONE,
-            front_face: vk::FrontFace::COUNTER_CLOCKWISE,
+            topology: PrimitiveTopology::TriangleList,
+            polygon: PolygonMode::Fill,
+            cull: CullMode::NONE,
+            front_face: FrontFace::CounterClockwise,
             ..Default::default()
         });
 
@@ -363,6 +357,16 @@ impl Renderer {
         )
     }
 
+    pub fn resize_frames(&mut self, max_frames_in_flight: usize) {
+        if max_frames_in_flight == 0 || self.frames.len() == max_frames_in_flight {
+            return;
+        }
+
+        self.device.wait_idle();
+        self.frames
+            .resize_with(max_frames_in_flight, FrameResources::default);
+    }
+
     pub fn context(&self) -> &egui_crate::Context {
         &self.context
     }
@@ -382,7 +386,7 @@ impl Renderer {
     pub fn register_user_texture(
         &mut self,
         texture: &ViewImage,
-        extent: vk::Extent2D,
+        extent: Extent2D,
     ) -> Result<TextureId, Error> {
         let id = TextureId::User(self.next_user_texture_id);
         self.next_user_texture_id += 1;
@@ -394,7 +398,7 @@ impl Renderer {
         &mut self,
         id: TextureId,
         texture: &ViewImage,
-        extent: vk::Extent2D,
+        extent: Extent2D,
     ) -> Result<(), Error> {
         let Some(existing) = self.textures.get(&id) else {
             return Err(Error::Validation(format!(
@@ -483,7 +487,7 @@ impl Renderer {
         &mut self,
         id: TextureId,
         texture: &ViewImage,
-        extent: vk::Extent2D,
+        extent: Extent2D,
     ) -> Result<(), Error> {
         let descriptor_set = self.allocate_texture_descriptor_set(texture)?;
         self.textures.insert(
@@ -491,11 +495,7 @@ impl Renderer {
             TextureBinding {
                 image: texture.clone(),
                 descriptor_set,
-                extent: vk::Extent3D {
-                    width: extent.width,
-                    height: extent.height,
-                    depth: 1,
-                },
+                extent: extent.to_3d(1),
                 kind: TextureKind::External,
                 initialized: true,
                 options: None,
@@ -554,11 +554,7 @@ impl Renderer {
             )));
         }
 
-        let extent = vk::Extent3D {
-            width: width as u32,
-            height: height as u32,
-            depth: 1,
-        };
+        let extent = Extent3D::new(width as u32, height as u32, 1);
 
         match delta.pos {
             Some(pos) => {
@@ -604,19 +600,19 @@ impl Renderer {
 
     fn create_managed_texture(
         &self,
-        extent: vk::Extent3D,
+        extent: Extent3D,
         options: epaint::textures::TextureOptions,
     ) -> Result<TextureBinding, Error> {
         let image = self.device.create_view_image(&ViewImageDesc {
             image: ImageDesc {
                 label: Some(Label::Name("egui texture")),
-                format: vk::Format::R8G8B8A8_UNORM,
+                format: Format::R8G8B8A8_UNORM,
                 extent,
                 usage: ImageUses::COPY_DST | ImageUses::SAMPLED,
                 ..Default::default()
             },
             sampler: Some(texture_sampler_create_info(options)),
-            aspect: Some(vk::ImageAspectFlags::COLOR),
+            aspect: Some(ImageAspect::COLOR),
             ..Default::default()
         })?;
 
@@ -646,7 +642,7 @@ impl Renderer {
             DescriptorWrite::SampledImage {
                 binding: 0,
                 image_view: &image.view,
-                image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+                image_layout: ImageLayout::Fragment,
                 array_element: None,
             },
             DescriptorWrite::Sampler {
@@ -671,7 +667,7 @@ impl Renderer {
             label: Some(Label::Name("egui texture upload")),
             size: pixels.len(),
             usage: BufferUses::COPY_SRC,
-            memory: MemoryPreset::Dynamic,
+            memory: MemoryPreset::Upload,
             host_access: HostAccess::WriteSequential,
             ..Default::default()
         })?;
@@ -680,27 +676,11 @@ impl Renderer {
         let [width, height] = delta.image.size();
         let pos = delta.pos.unwrap_or([0, 0]);
         let regions = vec![
-            vk::BufferImageCopy::default()
-                .buffer_offset(0)
-                .buffer_row_length(0)
-                .buffer_image_height(0)
-                .image_subresource(
-                    vk::ImageSubresourceLayers::default()
-                        .aspect_mask(vk::ImageAspectFlags::COLOR)
-                        .mip_level(0)
-                        .base_array_layer(0)
-                        .layer_count(1),
-                )
-                .image_offset(vk::Offset3D {
-                    x: pos[0] as i32,
-                    y: pos[1] as i32,
-                    z: 0,
-                })
-                .image_extent(vk::Extent3D {
-                    width: width as u32,
-                    height: height as u32,
-                    depth: 1,
-                }),
+            BufferImageCopy::new(
+                ImageSubresourceLayers::color(),
+                Extent3D::new(width as u32, height as u32, 1),
+            )
+            .image_offset(Offset3D::new(pos[0] as i32, pos[1] as i32, 0)),
         ];
 
         Ok(TextureUpload {
@@ -818,7 +798,7 @@ impl Frame<'_> {
                         ImageLayoutTransition::UNDEFINED
                     },
                     to: ImageLayoutTransition::new(ImageLayout::TransferDst),
-                    aspect: vk::ImageAspectFlags::COLOR,
+                    aspect: ImageAspect::COLOR,
                     ..Default::default()
                 },
             );
@@ -833,7 +813,7 @@ impl Frame<'_> {
                 ImageTransition {
                     from: ImageLayoutTransition::new(ImageLayout::TransferDst),
                     to: ImageLayoutTransition::FRAGMENT,
-                    aspect: vk::ImageAspectFlags::COLOR,
+                    aspect: ImageAspect::COLOR,
                     ..Default::default()
                 },
             );
@@ -848,7 +828,7 @@ impl Frame<'_> {
         }
     }
 
-    pub fn paint(&mut self, render: &mut RenderRecorder<'_>, extent: vk::Extent2D) {
+    pub fn paint(&mut self, render: &mut RenderRecorder<'_>, extent: Extent2D) {
         let frame = &self.renderer.frames[self.flight_index];
         let Some(vertex_buffer) = frame.vertex_buffer.as_ref() else {
             return;
@@ -879,196 +859,6 @@ impl Frame<'_> {
             render,
         );
     }
-
-    pub fn add_to_graph<'a>(
-        &'a mut self,
-        graph: &mut RenderGraph<'a>,
-        target: crate::GraphImage,
-        target_desc: ColorAttachmentDesc,
-        extent: vk::Extent2D,
-    ) {
-        let touched_textures = {
-            let frame = &self.renderer.frames[self.flight_index];
-            frame
-                .used_textures
-                .iter()
-                .copied()
-                .chain(frame.uploads.iter().map(|upload| upload.texture_id))
-                .collect::<Vec<_>>()
-        };
-        let initial_states = touched_textures
-            .iter()
-            .filter_map(|texture_id| {
-                self.renderer
-                    .textures
-                    .get(texture_id)
-                    .map(|texture| (*texture_id, texture.initialized))
-            })
-            .collect::<HashMap<_, _>>();
-
-        {
-            let frame = &self.renderer.frames[self.flight_index];
-            for upload in &frame.uploads {
-                if let Some(texture) = self.renderer.textures.get_mut(&upload.texture_id) {
-                    texture.initialized = true;
-                }
-            }
-        }
-
-        let renderer: &'a Renderer = &*self.renderer;
-        let frame = &renderer.frames[self.flight_index];
-
-        let mut graph_images = HashMap::new();
-        for texture_id in touched_textures {
-            if graph_images.contains_key(&texture_id) {
-                continue;
-            }
-
-            let Some(texture) = renderer.textures.get(&texture_id) else {
-                continue;
-            };
-
-            let image = graph.import_image_view(
-                format!("egui_texture_{texture_id:?}"),
-                &texture.image.image,
-                &texture.image.view,
-                ImportedImageDesc {
-                    extent: texture.extent,
-                    aspect: vk::ImageAspectFlags::COLOR,
-                    initial: if initial_states
-                        .get(&texture_id)
-                        .copied()
-                        .unwrap_or(texture.initialized)
-                    {
-                        ImageLayoutTransition::FRAGMENT
-                    } else {
-                        ImageLayoutTransition::UNDEFINED
-                    },
-                    initialized: initial_states
-                        .get(&texture_id)
-                        .copied()
-                        .unwrap_or(texture.initialized),
-                },
-            );
-            graph_images.insert(texture_id, image);
-        }
-
-        if !frame.uploads.is_empty() {
-            let uploads = frame
-                .uploads
-                .iter()
-                .enumerate()
-                .map(|(index, upload)| GraphUpload {
-                    buffer: graph.import_buffer(
-                        format!("egui_upload_{index}"),
-                        &upload.buffer,
-                        ImportedBufferDesc {
-                            initial: BufferAccessTransition::NONE,
-                            initialized: true,
-                        },
-                    ),
-                    image: graph_images[&upload.texture_id],
-                    regions: upload.regions.as_slice(),
-                })
-                .collect::<Vec<_>>();
-            let upload_exec = uploads.clone();
-
-            graph.add_copy_pass(
-                "egui_uploads",
-                |pass| {
-                    for upload in &uploads {
-                        pass.read_buffer(upload.buffer, crate::BufferAccess::TransferSrc);
-                        pass.write_image(upload.image, ImageAccess::TransferDst);
-                    }
-                },
-                move |ctx| {
-                    for upload in &upload_exec {
-                        let buffer = ctx.buffer(upload.buffer).clone();
-                        let image = ctx.image(upload.image).clone();
-                        ctx.cmd().copy_buffer_to_image(&CopyBufferToImageInfo {
-                            src: &buffer,
-                            dst: &image,
-                            dst_layout: ImageLayout::TransferDst,
-                            regions: upload.regions,
-                        });
-                    }
-                },
-            );
-        }
-
-        let Some(vertex_buffer) = frame.vertex_buffer.as_ref() else {
-            return;
-        };
-        let Some(index_buffer) = frame.index_buffer.as_ref() else {
-            return;
-        };
-
-        let graph_vertex = graph.import_buffer(
-            "egui_vertices",
-            vertex_buffer,
-            ImportedBufferDesc {
-                initial: BufferAccessTransition::NONE,
-                initialized: true,
-            },
-        );
-        let graph_index = graph.import_buffer(
-            "egui_indices",
-            index_buffer,
-            ImportedBufferDesc {
-                initial: BufferAccessTransition::NONE,
-                initialized: true,
-            },
-        );
-
-        let draws = frame
-            .draws
-            .iter()
-            .filter_map(|draw| {
-                renderer
-                    .textures
-                    .get(&draw.texture_id)
-                    .map(|texture| PreparedDraw {
-                        set: &texture.descriptor_set,
-                        clip_rect: draw.clip_rect,
-                        index_range: draw.index_range.clone(),
-                    })
-            })
-            .collect::<Vec<_>>();
-        let used_images = frame
-            .used_textures
-            .iter()
-            .filter_map(|texture_id| graph_images.get(texture_id).copied())
-            .collect::<Vec<_>>();
-        let pipeline = &renderer.pipeline;
-        let pixels_per_point = self.pixels_per_point;
-
-        graph.add_render_pass(
-            "egui",
-            |pass| {
-                pass.read_buffer(graph_vertex, crate::BufferAccess::Vertex);
-                pass.read_buffer(graph_index, crate::BufferAccess::Index);
-                for image in &used_images {
-                    pass.read_image(*image, ImageAccess::SampledFragment);
-                }
-                pass.write_color(target, target_desc);
-            },
-            move |ctx| {
-                let vertex_buffer = ctx.buffer(graph_vertex).clone();
-                let index_buffer = ctx.buffer(graph_index).clone();
-                ctx.begin_render(|render| {
-                    paint_render_pass(
-                        pipeline,
-                        &vertex_buffer,
-                        &index_buffer,
-                        &draws,
-                        pixels_per_point,
-                        extent,
-                        render,
-                    );
-                });
-            },
-        );
-    }
 }
 
 fn paint_render_pass(
@@ -1077,7 +867,7 @@ fn paint_render_pass(
     index_buffer: &Buffer,
     draws: &[PreparedDraw<'_>],
     pixels_per_point: f32,
-    extent: vk::Extent2D,
+    extent: Extent2D,
     render: &mut RenderRecorder<'_>,
 ) {
     if draws.is_empty() {
@@ -1086,15 +876,8 @@ fn paint_render_pass(
 
     render.bind_render_pipeline(pipeline);
     render.bind_vertex_buffer(0, vertex_buffer, 0);
-    render.bind_index_buffer(index_buffer, 0, vk::IndexType::UINT32);
-    render.viewport(vk::Viewport {
-        x: 0.0,
-        y: 0.0,
-        width: extent.width as f32,
-        height: extent.height as f32,
-        min_depth: 0.0,
-        max_depth: 1.0,
-    });
+    render.bind_index_buffer(index_buffer, 0, crate::IndexType::U32);
+    render.viewport(Viewport::from_extent(extent));
     render.push_render_constants(
         pipeline,
         PushConstants {
@@ -1115,17 +898,14 @@ fn paint_render_pass(
         render.draw_indexed(draw.index_range.clone(), 0, 0..1);
     }
 
-    render.scissor(vk::Rect2D {
-        offset: vk::Offset2D { x: 0, y: 0 },
-        extent,
-    });
+    render.scissor(Rect::from_extent(extent));
 }
 
 fn clip_rect_to_scissor(
     clip_rect: egui_crate::Rect,
     pixels_per_point: f32,
-    extent: vk::Extent2D,
-) -> Option<vk::Rect2D> {
+    extent: Extent2D,
+) -> Option<Rect> {
     let min_x = (clip_rect.min.x * pixels_per_point)
         .floor()
         .clamp(0.0, extent.width as f32);
@@ -1143,16 +923,10 @@ fn clip_rect_to_scissor(
         return None;
     }
 
-    Some(vk::Rect2D {
-        offset: vk::Offset2D {
-            x: min_x as i32,
-            y: min_y as i32,
-        },
-        extent: vk::Extent2D {
-            width: (max_x - min_x) as u32,
-            height: (max_y - min_y) as u32,
-        },
-    })
+    Some(Rect::new(
+        (min_x as i32, min_y as i32).into(),
+        Extent2D::new((max_x - min_x) as u32, (max_y - min_y) as u32),
+    ))
 }
 
 fn update_texture_sampler(
@@ -1171,7 +945,7 @@ fn update_texture_sampler(
         DescriptorWrite::SampledImage {
             binding: 0,
             image_view: &binding.image.view,
-            image_layout: vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            image_layout: ImageLayout::Fragment,
             array_element: None,
         },
         DescriptorWrite::Sampler {
@@ -1198,39 +972,25 @@ fn texture_sampler_create_info(
     }
 }
 
-fn texture_filter(filter: epaint::textures::TextureFilter) -> vk::Filter {
+fn texture_filter(filter: epaint::textures::TextureFilter) -> Filter {
     match filter {
-        epaint::textures::TextureFilter::Nearest => vk::Filter::NEAREST,
-        epaint::textures::TextureFilter::Linear => vk::Filter::LINEAR,
+        epaint::textures::TextureFilter::Nearest => Filter::Nearest,
+        epaint::textures::TextureFilter::Linear => Filter::Linear,
     }
 }
 
-fn texture_mipmap_mode(filter: Option<epaint::textures::TextureFilter>) -> vk::SamplerMipmapMode {
+fn texture_mipmap_mode(filter: Option<epaint::textures::TextureFilter>) -> SamplerMipmapMode {
     match filter.unwrap_or(epaint::textures::TextureFilter::Nearest) {
-        epaint::textures::TextureFilter::Nearest => vk::SamplerMipmapMode::NEAREST,
-        epaint::textures::TextureFilter::Linear => vk::SamplerMipmapMode::LINEAR,
+        epaint::textures::TextureFilter::Nearest => SamplerMipmapMode::Nearest,
+        epaint::textures::TextureFilter::Linear => SamplerMipmapMode::Linear,
     }
 }
 
-fn texture_wrap(wrap: epaint::textures::TextureWrapMode) -> vk::SamplerAddressMode {
+fn texture_wrap(wrap: epaint::textures::TextureWrapMode) -> SamplerAddressMode {
     match wrap {
-        epaint::textures::TextureWrapMode::ClampToEdge => vk::SamplerAddressMode::CLAMP_TO_EDGE,
-        epaint::textures::TextureWrapMode::Repeat => vk::SamplerAddressMode::REPEAT,
-        epaint::textures::TextureWrapMode::MirroredRepeat => {
-            vk::SamplerAddressMode::MIRRORED_REPEAT
-        }
+        epaint::textures::TextureWrapMode::ClampToEdge => SamplerAddressMode::ClampToEdge,
+        epaint::textures::TextureWrapMode::Repeat => SamplerAddressMode::Repeat,
+        epaint::textures::TextureWrapMode::MirroredRepeat => SamplerAddressMode::MirroredRepeat,
     }
 }
 
-fn is_srgb_format(format: vk::Format) -> bool {
-    matches!(
-        format,
-        vk::Format::R8_SRGB
-            | vk::Format::R8G8_SRGB
-            | vk::Format::R8G8B8_SRGB
-            | vk::Format::B8G8R8_SRGB
-            | vk::Format::R8G8B8A8_SRGB
-            | vk::Format::B8G8R8A8_SRGB
-            | vk::Format::A8B8G8R8_SRGB_PACK32
-    )
-}

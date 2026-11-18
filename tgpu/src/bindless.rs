@@ -4,8 +4,8 @@ use ash::vk;
 
 use crate::{
     Buffer, DescriptorBinding, DescriptorPoolInfo, DescriptorSet, DescriptorSetLayout,
-    DescriptorSetLayoutInfo, DescriptorType, DescriptorWrite, Device, ImageView, Sampler,
-    ShaderStageFlags,
+    DescriptorSetLayoutInfo, DescriptorType, DescriptorWrite, Device, ImageLayout, ImageView,
+    Sampler, ShaderStageFlags,
 };
 
 pub const BINDLESS_READ_BUFFER_BINDING: u32 = 0;
@@ -270,11 +270,7 @@ impl BindlessHeap {
         self.rw_buffers.free(handle.0);
     }
 
-    pub fn add_sampled_image(
-        &self,
-        view: &ImageView,
-        layout: vk::ImageLayout,
-    ) -> SampledImageHandle {
+    pub fn add_sampled_image(&self, view: &ImageView, layout: ImageLayout) -> SampledImageHandle {
         let handle = SampledImageHandle(self.sampled_images.allocate());
         self.update_sampled_image(handle, view, layout);
         handle
@@ -284,7 +280,7 @@ impl BindlessHeap {
         &self,
         handle: SampledImageHandle,
         view: &ImageView,
-        layout: vk::ImageLayout,
+        layout: ImageLayout,
     ) {
         self.sampled_images.assert_allocated(handle.0);
         self.set.write(&[DescriptorWrite::SampledImage {
@@ -299,11 +295,7 @@ impl BindlessHeap {
         self.sampled_images.free(handle.0);
     }
 
-    pub fn add_storage_image(
-        &self,
-        view: &ImageView,
-        layout: vk::ImageLayout,
-    ) -> StorageImageHandle {
+    pub fn add_storage_image(&self, view: &ImageView, layout: ImageLayout) -> StorageImageHandle {
         let handle = StorageImageHandle(self.storage_images.allocate());
         self.update_storage_image(handle, view, layout);
         handle
@@ -313,7 +305,7 @@ impl BindlessHeap {
         &self,
         handle: StorageImageHandle,
         view: &ImageView,
-        layout: vk::ImageLayout,
+        layout: ImageLayout,
     ) {
         self.storage_images.assert_allocated(handle.0);
         self.set.write(&[DescriptorWrite::StorageImage {

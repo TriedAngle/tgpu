@@ -1,5 +1,4 @@
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
-use tgpu::ash::vk;
 
 use winit::{
     application::ApplicationHandler,
@@ -51,6 +50,7 @@ pub struct Render {
     buffer: tgpu::Buffer,
     pipeline: tgpu::RenderPipeline,
     frame_count: usize,
+    frame_values: Vec<u64>,
 }
 
 impl Render {
@@ -98,18 +98,15 @@ impl Render {
         let swapchain = device.create_swapchain(&tgpu::SwapchainCreateInfo {
             display: window.display_handle().unwrap().as_raw(),
             window: window.window_handle().unwrap().as_raw(),
-            preferred_extent: vk::Extent2D {
-                width: size.width,
-                height: size.height,
-            },
+            preferred_extent: tgpu::Extent2D::new(size.width, size.height),
             preferred_image_count: 3,
-            preferred_present_mode: tgpu::PresentModeKHR::MAILBOX,
+            preferred_present_mode: tgpu::PresentMode::Mailbox,
             format_selector: Box::new(|formats| {
                 formats
                     .iter()
                     .find(|f| {
                         f.format == tgpu::Format::B8G8R8A8_SRGB
-                            && f.color_space == tgpu::ColorSpaceKHR::SRGB_NONLINEAR
+                            && f.color_space == tgpu::ColorSpace::SRGB_NONLINEAR
                     })
                     .copied()
                     .unwrap_or(formats[0])
@@ -127,13 +124,14 @@ impl Render {
             label: Some(tgpu::Label::Name("Present Pipeline")),
             vertex_shader: shader.entry("vmain"),
             fragment_shader: shader.entry("fmain"),
-            cull: tgpu::CullModeFlags::BACK,
-            topology: tgpu::PrimitiveTopology::TRIANGLE_LIST,
-            polygon: tgpu::PolygonMode::FILL,
-            front_face: vk::FrontFace::CLOCKWISE,
+            cull: tgpu::CullMode::BACK,
+            topology: tgpu::PrimitiveTopology::TriangleList,
+            polygon: tgpu::PolygonMode::Fill,
+            front_face: tgpu::FrontFace::Clockwise,
             color_formats: &[swapchain.format()],
             ..Default::default()
         });
+        let frame_values = vec![0; swapchain.max_frames_in_flight()];
 
         let new = Self {
             window,
@@ -144,22 +142,25 @@ impl Render {
             buffer,
             pipeline,
             frame_count: 0,
+            frame_values,
         };
 
         Ok(new)
     }
 
     fn render_frame(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        let ring = self.swapchain.flight_index();
+        self.queue.timeline.wait(self.frame_values[ring], None);
+
         let frame = self.swapchain.acquire_next(None)?;
         log::trace!("Start Frame {:?}", frame.index);
-        if frame.suboptimal {
+        if frame.out_of_date {
             log::debug!("recreate swapchain");
             let size = self.window.inner_size();
-            self.swapchain.set_preferred_extent(vk::Extent2D {
-                width: size.width,
-                height: size.height,
-            });
+            self.swapchain
+                .set_preferred_extent(tgpu::Extent2D::new(size.width, size.height));
             let _ = self.swapchain.recreate();
+            self.frame_values = vec![0; self.swapchain.max_frames_in_flight()];
             return Ok(());
         }
         let mut recorder = self.queue.record();
@@ -169,7 +170,7 @@ impl Render {
             tgpu::ImageTransition {
                 from: tgpu::ImageLayoutTransition::UNDEFINED,
                 to: tgpu::ImageLayoutTransition::COLOR,
-                aspect: vk::ImageAspectFlags::COLOR,
+                aspect: tgpu::ImageAspect::COLOR,
                 ..Default::default()
             },
         );
@@ -179,42 +180,24 @@ impl Render {
         let color = (frame_number / 120.0).sin().abs();
         let invert_color = 1.0 - color;
 
-        let attachment = vk::RenderingAttachmentInfo::default()
-            .image_view(self.swapchain.view(frame).inner.handle)
-            .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-            .load_op(vk::AttachmentLoadOp::CLEAR)
-            .store_op(vk::AttachmentStoreOp::STORE)
-            .clear_value(vk::ClearValue {
-                color: vk::ClearColorValue {
-                    float32: [0.0, invert_color, color, 0.5],
-                },
-            });
+        let attachment = tgpu::RenderAttachment::color(self.swapchain.view(frame)).clear_color([
+            0.0,
+            invert_color,
+            color,
+            0.5,
+        ]);
 
         recorder.bind_render_pipeline(&self.pipeline);
 
         recorder.begin_render(
             &tgpu::RenderInfo {
                 colors: &[attachment],
-                area: vk::Rect2D {
-                    extent: self.swapchain.extent(),
-                    ..Default::default()
-                },
+                area: tgpu::Rect::from_extent(self.swapchain.extent()),
                 ..Default::default()
             },
             |recorder| {
-                let viewport = vk::Viewport {
-                    x: 0.0,
-                    y: 0.0,
-                    width: self.swapchain.extent().width as f32,
-                    height: self.swapchain.extent().height as f32,
-                    min_depth: 0.0,
-                    max_depth: 1.0,
-                };
-
-                let scissor = vk::Rect2D {
-                    extent: self.swapchain.extent(),
-                    ..Default::default()
-                };
+                let viewport = tgpu::Viewport::from_extent(self.swapchain.extent());
+                let scissor = tgpu::Rect::from_extent(self.swapchain.extent());
 
                 recorder.viewport(viewport);
                 recorder.scissor(scissor);
@@ -228,34 +211,33 @@ impl Render {
             tgpu::ImageTransition {
                 from: tgpu::ImageLayoutTransition::COLOR,
                 to: tgpu::ImageLayoutTransition::PRESENT,
-                aspect: vk::ImageAspectFlags::COLOR,
+                aspect: tgpu::ImageAspect::COLOR,
                 ..Default::default()
             },
         );
 
-        let available_semaphore = self.swapchain.inner.available_semaphore(frame);
-        let finished_semaphore = self.swapchain.inner.finished_semaphore(frame);
+        let available_semaphore = self.swapchain.available_semaphore(frame);
+        let finished_semaphore = self.swapchain.finished_semaphore(frame);
 
-        self.queue.submit(tgpu::SubmitInfo {
+        let signal_value = self.queue.submit(tgpu::SubmitInfo {
             records: &[recorder.finish()],
             wait_binary: &[(
                 available_semaphore,
-                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                tgpu::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
             )],
             signal_binary: &[finished_semaphore],
-            fence: Some(self.swapchain.inner.fence(frame)),
             ..Default::default()
         });
+        self.frame_values[ring] = signal_value;
 
         match self.swapchain.present(&self.queue, frame) {
             Ok(true) | Err(_) => {
                 log::debug!("recreate swapchain");
                 let size = self.window.inner_size();
-                self.swapchain.set_preferred_extent(vk::Extent2D {
-                    width: size.width,
-                    height: size.height,
-                });
+                self.swapchain
+                    .set_preferred_extent(tgpu::Extent2D::new(size.width, size.height));
                 let _ = self.swapchain.recreate();
+                self.frame_values = vec![0; self.swapchain.max_frames_in_flight()];
                 return Ok(());
             }
             _ => {}

@@ -4,7 +4,9 @@ use std::borrow::Cow;
 use std::ffi;
 use std::sync::Arc;
 
-use crate::{Adapter, AdapterDescriptorIndexingFeatures, AdapterFeatures, GPUError, RankedAdapter};
+use crate::{
+    Adapter, AdapterDescriptorIndexingFeatures, AdapterFeatures, Format, GPUError, RankedAdapter,
+};
 
 pub struct Instance {
     pub(crate) inner: RawInstance,
@@ -67,7 +69,7 @@ impl Instance {
 
     pub fn adapters(
         &self,
-        formats: &[vk::Format],
+        formats: &[Format],
     ) -> Result<impl Iterator<Item = Adapter> + use<>, GPUError> {
         let adapters = unsafe { self.inner.adapters(formats)? };
         Ok(adapters.into_iter().map(|inner| Adapter {
@@ -75,7 +77,7 @@ impl Instance {
         }))
     }
 
-    pub fn rank_adapters(&self, formats: &[vk::Format]) -> Result<Vec<RankedAdapter>, GPUError> {
+    pub fn rank_adapters(&self, formats: &[Format]) -> Result<Vec<RankedAdapter>, GPUError> {
         let mut adapters = self.adapters(formats)?.collect::<Vec<_>>();
         adapters.sort_by(|left, right| {
             right
@@ -93,10 +95,7 @@ impl Instance {
             .collect())
     }
 
-    pub fn default_adapter(
-        &self,
-        formats: &[vk::Format],
-    ) -> Result<Option<RankedAdapter>, GPUError> {
+    pub fn default_adapter(&self, formats: &[Format]) -> Result<Option<RankedAdapter>, GPUError> {
         Ok(self.rank_adapters(formats)?.into_iter().next())
     }
 
@@ -253,7 +252,14 @@ impl InstanceImpl {
     }
 
     pub unsafe fn features(&self, pdev: vk::PhysicalDevice) -> AdapterFeatures {
-        let (fill_mode_non_solid, descriptor_indexing, buffer_device_address, shader_int64) = {
+        let (
+            fill_mode_non_solid,
+            multi_draw_indirect,
+            draw_indirect_first_instance,
+            descriptor_indexing,
+            buffer_device_address,
+            shader_int64,
+        ) = {
             let mut descriptor_indexing_features =
                 vk::PhysicalDeviceDescriptorIndexingFeatures::default();
             let mut buffer_device_address_features =
@@ -262,10 +268,16 @@ impl InstanceImpl {
                 .push_next(&mut descriptor_indexing_features)
                 .push_next(&mut buffer_device_address_features);
 
-            unsafe { self.handle.get_physical_device_features2(pdev, &mut features2) };
+            unsafe {
+                self.handle
+                    .get_physical_device_features2(pdev, &mut features2)
+            };
 
             let base_features = features2.features;
             let fill_mode_non_solid = base_features.fill_mode_non_solid == vk::TRUE;
+            let multi_draw_indirect = base_features.multi_draw_indirect == vk::TRUE;
+            let draw_indirect_first_instance =
+                base_features.draw_indirect_first_instance == vk::TRUE;
             let uniform_buffer_dynamic_indexing =
                 base_features.shader_uniform_buffer_array_dynamic_indexing == vk::TRUE;
             let sampled_image_dynamic_indexing =
@@ -315,10 +327,13 @@ impl InstanceImpl {
                     == vk::TRUE,
             };
 
-            let buffer_device_address = buffer_device_address_features.buffer_device_address == vk::TRUE;
+            let buffer_device_address =
+                buffer_device_address_features.buffer_device_address == vk::TRUE;
 
             (
                 fill_mode_non_solid,
+                multi_draw_indirect,
+                draw_indirect_first_instance,
                 descriptor_indexing,
                 buffer_device_address,
                 shader_int64,
@@ -327,6 +342,8 @@ impl InstanceImpl {
 
         AdapterFeatures {
             fill_mode_non_solid,
+            multi_draw_indirect,
+            draw_indirect_first_instance,
             descriptor_indexing,
             buffer_device_address,
             shader_int64,
@@ -345,14 +362,14 @@ impl InstanceImpl {
     pub unsafe fn format_properties(
         &self,
         pdev: vk::PhysicalDevice,
-        formats: &[vk::Format],
-    ) -> Vec<(vk::Format, vk::FormatProperties)> {
+        formats: &[Format],
+    ) -> Vec<(Format, vk::FormatProperties)> {
         formats
             .iter()
             .map(|&format| unsafe {
                 let props = self
                     .handle
-                    .get_physical_device_format_properties(pdev, format);
+                    .get_physical_device_format_properties(pdev, format.into());
                 (format, props)
             })
             .collect::<Vec<_>>()

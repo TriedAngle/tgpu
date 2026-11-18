@@ -10,10 +10,58 @@ use std::{
 
 use crate::{
     BlitImageInfo, Buffer, BufferTransition, ComputePipeline, CopyBufferInfo,
-    CopyBufferToImageInfo, CopyImageInfo, DescriptorSet, GPUError, Image, ImageTransition, Queue,
-    RenderPipeline, Semaphore,
+    CopyBufferToImageInfo, CopyImageInfo, DescriptorSet, GPUError, Image, ImageLayout,
+    ImageTransition, ImageView, Queue, Rect, RenderPipeline, Semaphore, Viewport,
     raw::{ComputePipelineImpl, QueueImpl, RawDevice, RenderPipelineImpl},
 };
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum IndexType {
+    U16,
+    U32,
+}
+
+impl From<IndexType> for vk::IndexType {
+    fn from(value: IndexType) -> Self {
+        match value {
+            IndexType::U16 => Self::UINT16,
+            IndexType::U32 => Self::UINT32,
+        }
+    }
+}
+
+bitflags::bitflags! {
+    /// A subset of the legacy `VkPipelineStageFlags` bits used for submission
+    /// dependencies. Use [`PipelineStageFlags::from_bits_retain`] for anything
+    /// not named here.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    pub struct PipelineStageFlags: u32 {
+        const TOP_OF_PIPE = 1 << 0;
+        const DRAW_INDIRECT = 1 << 1;
+        const VERTEX_INPUT = 1 << 2;
+        const EARLY_FRAGMENT_TESTS = 1 << 3;
+        const LATE_FRAGMENT_TESTS = 1 << 4;
+        const FRAGMENT_SHADER = 1 << 7;
+        const COLOR_ATTACHMENT_OUTPUT = 1 << 8;
+        const COMPUTE_SHADER = 1 << 11;
+        const TRANSFER = 1 << 12;
+        const BOTTOM_OF_PIPE = 1 << 13;
+        const ALL_GRAPHICS = 1 << 15;
+        const ALL_COMMANDS = 1 << 16;
+    }
+}
+
+impl From<PipelineStageFlags> for vk::PipelineStageFlags {
+    fn from(value: PipelineStageFlags) -> Self {
+        Self::from_raw(value.bits())
+    }
+}
+
+impl From<vk::PipelineStageFlags> for PipelineStageFlags {
+    fn from(value: vk::PipelineStageFlags) -> Self {
+        Self::from_bits_retain(value.as_raw())
+    }
+}
 
 #[derive(Debug)]
 pub struct CommandPools {
@@ -62,12 +110,169 @@ pub struct CommandRecorderImpl {
 }
 
 #[derive(Debug, Copy, Clone)]
+pub enum AttachmentLoadOp {
+    Load,
+    Clear,
+    DontCare,
+}
+
+impl From<AttachmentLoadOp> for vk::AttachmentLoadOp {
+    fn from(value: AttachmentLoadOp) -> Self {
+        match value {
+            AttachmentLoadOp::Load => vk::AttachmentLoadOp::LOAD,
+            AttachmentLoadOp::Clear => vk::AttachmentLoadOp::CLEAR,
+            AttachmentLoadOp::DontCare => vk::AttachmentLoadOp::DONT_CARE,
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub enum AttachmentStoreOp {
+    Store,
+    DontCare,
+}
+
+impl From<AttachmentStoreOp> for vk::AttachmentStoreOp {
+    fn from(value: AttachmentStoreOp) -> Self {
+        match value {
+            AttachmentStoreOp::Store => vk::AttachmentStoreOp::STORE,
+            AttachmentStoreOp::DontCare => vk::AttachmentStoreOp::DONT_CARE,
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub enum ClearValue {
+    Color([f32; 4]),
+    IntColor([i32; 4]),
+    UintColor([u32; 4]),
+    DepthStencil { depth: f32, stencil: u32 },
+}
+
+impl From<ClearValue> for vk::ClearValue {
+    fn from(value: ClearValue) -> Self {
+        match value {
+            ClearValue::Color(float32) => vk::ClearValue {
+                color: vk::ClearColorValue { float32 },
+            },
+            ClearValue::IntColor(int32) => vk::ClearValue {
+                color: vk::ClearColorValue { int32 },
+            },
+            ClearValue::UintColor(uint32) => vk::ClearValue {
+                color: vk::ClearColorValue { uint32 },
+            },
+            ClearValue::DepthStencil { depth, stencil } => vk::ClearValue {
+                depth_stencil: vk::ClearDepthStencilValue { depth, stencil },
+            },
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub struct RenderAttachment<'a> {
+    pub view: &'a ImageView,
+    pub layout: ImageLayout,
+    pub load: AttachmentLoadOp,
+    pub store: AttachmentStoreOp,
+    pub clear: Option<ClearValue>,
+}
+
+impl<'a> RenderAttachment<'a> {
+    pub fn new(view: &'a ImageView, layout: ImageLayout) -> Self {
+        Self {
+            view,
+            layout,
+            load: AttachmentLoadOp::Load,
+            store: AttachmentStoreOp::Store,
+            clear: None,
+        }
+    }
+
+    pub fn color(view: &'a ImageView) -> Self {
+        Self::new(view, ImageLayout::Color)
+    }
+
+    pub fn depth(view: &'a ImageView) -> Self {
+        Self::new(view, ImageLayout::DepthStencil)
+    }
+
+    pub fn layout(mut self, layout: ImageLayout) -> Self {
+        self.layout = layout;
+        self
+    }
+
+    pub fn load_op(mut self, load: AttachmentLoadOp) -> Self {
+        self.load = load;
+        self
+    }
+
+    pub fn store_op(mut self, store: AttachmentStoreOp) -> Self {
+        self.store = store;
+        self
+    }
+
+    pub fn load(mut self) -> Self {
+        self.load = AttachmentLoadOp::Load;
+        self.clear = None;
+        self
+    }
+
+    pub fn clear_value(mut self, clear: ClearValue) -> Self {
+        self.load = AttachmentLoadOp::Clear;
+        self.clear = Some(clear);
+        self
+    }
+
+    pub fn clear_color(self, color: [f32; 4]) -> Self {
+        self.clear_value(ClearValue::Color(color))
+    }
+
+    pub fn clear_depth(self, depth: f32) -> Self {
+        self.clear_depth_stencil(depth, 0)
+    }
+
+    pub fn clear_depth_stencil(self, depth: f32, stencil: u32) -> Self {
+        self.clear_value(ClearValue::DepthStencil { depth, stencil })
+    }
+
+    pub fn dont_care_load(mut self) -> Self {
+        self.load = AttachmentLoadOp::DontCare;
+        self.clear = None;
+        self
+    }
+
+    pub fn store(mut self) -> Self {
+        self.store = AttachmentStoreOp::Store;
+        self
+    }
+
+    pub fn dont_care_store(mut self) -> Self {
+        self.store = AttachmentStoreOp::DontCare;
+        self
+    }
+
+    fn as_vk(&self) -> vk::RenderingAttachmentInfo<'static> {
+        let mut info = vk::RenderingAttachmentInfo::default()
+            .image_view(self.view.inner.handle)
+            .image_layout(self.layout.into())
+            .load_op(self.load.into())
+            .store_op(self.store.into());
+
+        if let Some(clear) = self.clear {
+            info = info.clear_value(clear.into());
+        }
+
+        info
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
 pub struct RenderInfo<'a> {
-    pub area: vk::Rect2D,
+    pub area: Rect,
     pub layers: u32,
-    pub colors: &'a [vk::RenderingAttachmentInfo<'a>],
-    pub depth: Option<vk::RenderingAttachmentInfo<'a>>,
-    pub stencil: Option<vk::RenderingAttachmentInfo<'a>>,
+    pub colors: &'a [RenderAttachment<'a>],
+    pub depth: Option<RenderAttachment<'a>>,
+    pub stencil: Option<RenderAttachment<'a>>,
 }
 
 pub struct RenderRecorder<'a> {
@@ -77,7 +282,7 @@ pub struct RenderRecorder<'a> {
 impl Default for RenderInfo<'_> {
     fn default() -> Self {
         Self {
-            area: vk::Rect2D::default(),
+            area: Rect::default(),
             layers: 1,
             colors: &[],
             depth: None,
@@ -198,12 +403,12 @@ impl CommandRecorder {
 }
 
 impl<'a> RenderRecorder<'a> {
-    pub fn viewport(&mut self, viewport: vk::Viewport) {
+    pub fn viewport(&mut self, viewport: Viewport) {
         let inner = unsafe { &mut *self.command_recorder.inner.get() };
         unsafe { inner.viewport(viewport) };
     }
 
-    pub fn scissor(&mut self, scissor: vk::Rect2D) {
+    pub fn scissor(&mut self, scissor: Rect) {
         let inner = unsafe { &mut *self.command_recorder.inner.get() };
         unsafe { inner.scissor(scissor) };
     }
@@ -263,7 +468,7 @@ impl<'a> RenderRecorder<'a> {
         &mut self,
         buffer: &Buffer,
         offset: vk::DeviceSize,
-        index_type: vk::IndexType,
+        index_type: IndexType,
     ) {
         let inner = unsafe { &mut *self.command_recorder.inner.get() };
         unsafe { inner.bind_index_buffer(buffer, offset, index_type) };
@@ -308,7 +513,8 @@ impl CommandRecorderImpl {
         }
     }
 
-    pub unsafe fn viewport(&self, viewport: vk::Viewport) {
+    pub unsafe fn viewport(&self, viewport: Viewport) {
+        let viewport = viewport.into();
         unsafe {
             self.device
                 .handle
@@ -316,7 +522,8 @@ impl CommandRecorderImpl {
         }
     }
 
-    pub unsafe fn scissor(&self, scissor: vk::Rect2D) {
+    pub unsafe fn scissor(&self, scissor: Rect) {
+        let scissor = scissor.into();
         unsafe {
             self.device
                 .handle
@@ -325,15 +532,23 @@ impl CommandRecorderImpl {
     }
 
     pub unsafe fn begin_render(&self, info: &RenderInfo<'_>) {
-        let mut rendering_info = vk::RenderingInfo::default()
-            .render_area(info.area)
-            .layer_count(info.layers)
-            .color_attachments(info.colors);
+        let colors = info
+            .colors
+            .iter()
+            .map(RenderAttachment::as_vk)
+            .collect::<Vec<_>>();
+        let depth = info.depth.as_ref().map(RenderAttachment::as_vk);
+        let stencil = info.stencil.as_ref().map(RenderAttachment::as_vk);
 
-        if let Some(depth) = &info.depth {
+        let mut rendering_info = vk::RenderingInfo::default()
+            .render_area(info.area.into())
+            .layer_count(info.layers)
+            .color_attachments(&colors);
+
+        if let Some(depth) = &depth {
             rendering_info = rendering_info.depth_attachment(depth)
         }
-        if let Some(stencil) = &info.stencil {
+        if let Some(stencil) = &stencil {
             rendering_info = rendering_info.stencil_attachment(stencil)
         }
         unsafe {
@@ -398,14 +613,14 @@ impl CommandRecorderImpl {
         &self,
         buffer: &Buffer,
         offset: vk::DeviceSize,
-        index_type: vk::IndexType,
+        index_type: IndexType,
     ) {
         unsafe {
             self.device.handle.cmd_bind_index_buffer(
                 self.buffer.handle,
                 buffer.inner.handle,
                 offset,
-                index_type,
+                index_type.into(),
             );
         }
     }
@@ -427,7 +642,7 @@ impl CommandRecorderImpl {
             .dst_access_mask(dst_access)
             .subresource_range(
                 vk::ImageSubresourceRange::default()
-                    .aspect_mask(transition.aspect)
+                    .aspect_mask(transition.aspect.into())
                     .base_mip_level(transition.mips.start)
                     .level_count(transition.mips.len() as u32)
                     .base_array_layer(transition.layers.start)
@@ -557,7 +772,7 @@ impl CommandRecorderImpl {
                 .dst_image(info.dst.inner.handle)
                 .dst_image_layout(info.dst_layout.into())
                 .regions(&single)
-                .filter(info.filter);
+                .filter(info.filter.into());
 
             unsafe {
                 self.device
@@ -583,7 +798,7 @@ impl CommandRecorderImpl {
                 .dst_image(info.dst.inner.handle)
                 .dst_image_layout(info.dst_layout.into())
                 .regions(&regions2)
-                .filter(info.filter);
+                .filter(info.filter.into());
 
             unsafe {
                 self.device
@@ -613,13 +828,20 @@ impl CommandRecorderImpl {
             return;
         }
 
+        let regions = info
+            .regions
+            .iter()
+            .copied()
+            .map(Into::into)
+            .collect::<Vec<vk::BufferImageCopy>>();
+
         unsafe {
             self.device.handle.cmd_copy_buffer_to_image(
                 self.buffer.handle,
                 info.src.inner.handle,
                 info.dst.inner.handle,
                 info.dst_layout.into(),
-                info.regions,
+                &regions,
             );
         }
     }
@@ -704,11 +926,10 @@ impl CommandRecorderImpl {
 #[derive(Debug, Default)]
 pub struct SubmitInfo<'a> {
     pub records: &'a [CommandBuffer],
-    pub wait_binary: &'a [(&'a Semaphore, vk::PipelineStageFlags)],
-    pub wait_timeline: &'a [(&'a Semaphore, u64, vk::PipelineStageFlags)],
+    pub wait_binary: &'a [(&'a Semaphore, PipelineStageFlags)],
+    pub wait_timeline: &'a [(&'a Semaphore, u64, PipelineStageFlags)],
     pub signal_binary: &'a [&'a Semaphore],
     pub signal_timeline: &'a [(&'a Semaphore, u64)],
-    pub fence: Option<vk::Fence>,
 }
 
 impl Queue {
@@ -755,13 +976,13 @@ impl Queue {
         let wait_binary = info
             .wait_binary
             .iter()
-            .map(|(s, f)| (s.inner.handle, *f))
+            .map(|(s, f)| (s.inner.handle, (*f).into()))
             .collect::<Vec<_>>();
 
         let wait_timeline = info
             .wait_timeline
             .iter()
-            .map(|(s, v, f)| (s.inner.handle, *v, *f))
+            .map(|(s, v, f)| (s.inner.handle, *v, (*f).into()))
             .collect::<Vec<_>>();
 
         let signal_binary = info
@@ -786,7 +1007,6 @@ impl Queue {
                 &wait_timeline,
                 &signal_binary,
                 &signal_timeline,
-                info.fence.unwrap_or(vk::Fence::null()),
             )
             .unwrap()
     }
@@ -803,7 +1023,6 @@ impl QueueImpl {
         wait_timeline: &[(vk::Semaphore, u64, vk::PipelineStageFlags)],
         signal_binary: &[vk::Semaphore],
         signal_timeline: &[(vk::Semaphore, u64)],
-        fence: vk::Fence,
     ) -> Result<u64, GPUError> {
         let timeline_index = timeline.get();
 
@@ -863,7 +1082,7 @@ impl QueueImpl {
         unsafe {
             self.device
                 .handle
-                .queue_submit(self.handle, &[submit_info], fence)?;
+                .queue_submit(self.handle, &[submit_info], vk::Fence::null())?;
         }
 
         Ok(submission_index)

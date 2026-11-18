@@ -14,6 +14,7 @@ pub struct BufferUses: u32 {
         const UNIFORM = 1 << 4;
         const STORAGE = 1 << 5;
         const DEVICE_ADDRESS = 1 << 6;
+        const INDIRECT = 1 << 7;
     }
 }
 
@@ -30,6 +31,7 @@ bitflags::bitflags! {
         const STORAGE = 1 << 7;
         const QUERY = 1 << 8;
         const DEVICE_ADDRESS = 1 << 9;
+        const INDIRECT = 1 << 10;
         const SHARE = 1 << 12;
 
         const DEVICE = 1 << 16;
@@ -65,6 +67,9 @@ impl From<BufferUsage> for vk::BufferUsageFlags {
         }
         if usage.contains(BufferUsage::DEVICE_ADDRESS) {
             vk_usage |= vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS;
+        }
+        if usage.contains(BufferUsage::INDIRECT) {
+            vk_usage |= vk::BufferUsageFlags::INDIRECT_BUFFER;
         }
         vk_usage
     }
@@ -219,6 +224,13 @@ impl BufferAccessTransition {
             vk::AccessFlags2::SHADER_READ | vk::AccessFlags2::SHADER_WRITE,
         )
     }
+
+    pub fn vertex_input_read() -> Self {
+        Self::new(
+            vk::PipelineStageFlags2::VERTEX_ATTRIBUTE_INPUT,
+            vk::AccessFlags2::VERTEX_ATTRIBUTE_READ,
+        )
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -280,7 +292,8 @@ impl Device {
             ));
         }
 
-        if desc.usage.contains(BufferUses::DEVICE_ADDRESS) && !self.inner.features.buffer_device_address
+        if desc.usage.contains(BufferUses::DEVICE_ADDRESS)
+            && !self.inner.features.buffer_device_address
         {
             return Err(GPUError::Validation(
                 "BufferUses::DEVICE_ADDRESS requires buffer_device_address to be enabled on the device",
@@ -416,6 +429,9 @@ impl From<BufferUses> for BufferUsage {
         }
         if usage.contains(BufferUses::DEVICE_ADDRESS) {
             raw |= BufferUsage::DEVICE_ADDRESS;
+        }
+        if usage.contains(BufferUses::INDIRECT) {
+            raw |= BufferUsage::INDIRECT;
         }
         raw
     }

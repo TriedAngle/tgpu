@@ -133,7 +133,7 @@ impl WgslShader {
 /// Equivalent to:
 /// slangc <input>.slang \
 ///     -target spirv \
-///     -profile spirv_1_4 \
+///     -profile spirv_1_3 \
 ///     -fvk-use-entrypoint-name \
 ///     -emit-spirv-directly \
 ///     -o <output>.spv
@@ -166,7 +166,7 @@ where
         .arg("-target")
         .arg("spirv")
         .arg("-profile")
-        .arg("spirv_1_4")
+        .arg("spirv_1_3")
         .arg("-fvk-use-entrypoint-name")
         .arg("-emit-spirv-directly")
         .arg("-o")

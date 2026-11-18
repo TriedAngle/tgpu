@@ -1,5 +1,5 @@
 [package]
-name = "egui_graph"
+name = "minimal_latest"
 version = "0.1.0"
 edition = "2024"
 
@@ -9,4 +9,5 @@ winit = { workspace = true }
 raw-window-handle = { workspace = true }
 log = { workspace = true }
 env_logger = "0.11.8"
-bytemuck = { workspace = true, features = ["derive"] }
+bytemuck = { workspace = true }
+image = { version = "0.25.10", default-features = false, features = ["jpeg"] }

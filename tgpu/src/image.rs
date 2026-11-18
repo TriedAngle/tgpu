@@ -4,8 +4,124 @@ use ash::vk;
 use vkm::Alloc;
 
 use crate::{
-    Allocation, Buffer, Device, GPUError, HostAccess, Label, MemoryPreset, Queue, raw::RawDevice,
+    Allocation, Buffer, CompareOp, Device, Extent2D, Extent3D, Format, GPUError, HostAccess, Label,
+    MemoryPreset, Offset3D, Queue, raw::RawDevice,
 };
+
+bitflags::bitflags! {
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+    pub struct ImageAspect: u32 {
+        const COLOR = vk::ImageAspectFlags::COLOR.as_raw();
+        const DEPTH = vk::ImageAspectFlags::DEPTH.as_raw();
+        const STENCIL = vk::ImageAspectFlags::STENCIL.as_raw();
+        const DEPTH_STENCIL = Self::DEPTH.bits() | Self::STENCIL.bits();
+    }
+}
+
+impl From<ImageAspect> for vk::ImageAspectFlags {
+    fn from(value: ImageAspect) -> Self {
+        vk::ImageAspectFlags::from_raw(value.bits())
+    }
+}
+
+impl From<vk::ImageAspectFlags> for ImageAspect {
+    fn from(value: vk::ImageAspectFlags) -> Self {
+        Self::from_bits_retain(value.as_raw())
+    }
+}
+
+#[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
+pub enum Filter {
+    Nearest,
+    #[default]
+    Linear,
+    Custom(vk::Filter),
+}
+
+impl From<Filter> for vk::Filter {
+    fn from(value: Filter) -> Self {
+        match value {
+            Filter::Nearest => vk::Filter::NEAREST,
+            Filter::Linear => vk::Filter::LINEAR,
+            Filter::Custom(raw) => raw,
+        }
+    }
+}
+
+impl From<vk::Filter> for Filter {
+    fn from(value: vk::Filter) -> Self {
+        match value {
+            vk::Filter::NEAREST => Self::Nearest,
+            vk::Filter::LINEAR => Self::Linear,
+            raw => Self::Custom(raw),
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
+pub enum SamplerMipmapMode {
+    Nearest,
+    #[default]
+    Linear,
+    Custom(vk::SamplerMipmapMode),
+}
+
+impl From<SamplerMipmapMode> for vk::SamplerMipmapMode {
+    fn from(value: SamplerMipmapMode) -> Self {
+        match value {
+            SamplerMipmapMode::Nearest => vk::SamplerMipmapMode::NEAREST,
+            SamplerMipmapMode::Linear => vk::SamplerMipmapMode::LINEAR,
+            SamplerMipmapMode::Custom(raw) => raw,
+        }
+    }
+}
+
+impl From<vk::SamplerMipmapMode> for SamplerMipmapMode {
+    fn from(value: vk::SamplerMipmapMode) -> Self {
+        match value {
+            vk::SamplerMipmapMode::NEAREST => Self::Nearest,
+            vk::SamplerMipmapMode::LINEAR => Self::Linear,
+            raw => Self::Custom(raw),
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
+pub enum SamplerAddressMode {
+    Repeat,
+    MirroredRepeat,
+    #[default]
+    ClampToEdge,
+    ClampToBorder,
+    MirrorClampToEdge,
+    Custom(vk::SamplerAddressMode),
+}
+
+impl From<SamplerAddressMode> for vk::SamplerAddressMode {
+    fn from(value: SamplerAddressMode) -> Self {
+        match value {
+            SamplerAddressMode::Repeat => vk::SamplerAddressMode::REPEAT,
+            SamplerAddressMode::MirroredRepeat => vk::SamplerAddressMode::MIRRORED_REPEAT,
+            SamplerAddressMode::ClampToEdge => vk::SamplerAddressMode::CLAMP_TO_EDGE,
+            SamplerAddressMode::ClampToBorder => vk::SamplerAddressMode::CLAMP_TO_BORDER,
+            SamplerAddressMode::MirrorClampToEdge => vk::SamplerAddressMode::MIRROR_CLAMP_TO_EDGE,
+            SamplerAddressMode::Custom(raw) => raw,
+        }
+    }
+}
+
+impl From<vk::SamplerAddressMode> for SamplerAddressMode {
+    fn from(value: vk::SamplerAddressMode) -> Self {
+        match value {
+            vk::SamplerAddressMode::REPEAT => Self::Repeat,
+            vk::SamplerAddressMode::MIRRORED_REPEAT => Self::MirroredRepeat,
+            vk::SamplerAddressMode::CLAMP_TO_EDGE => Self::ClampToEdge,
+            vk::SamplerAddressMode::CLAMP_TO_BORDER => Self::ClampToBorder,
+            vk::SamplerAddressMode::MIRROR_CLAMP_TO_EDGE => Self::MirrorClampToEdge,
+            raw => Self::Custom(raw),
+        }
+    }
+}
 
 // TODO: support custom stuff
 bitflags::bitflags! {
@@ -173,9 +289,9 @@ bitflags::bitflags! {
 
 #[derive(Debug, Clone)]
 pub struct ImageDesc<'a> {
-    pub format: vk::Format,
+    pub format: Format,
     pub ty: vk::ImageType,
-    pub extent: vk::Extent3D,
+    pub extent: Extent3D,
     pub mip_levels: u32,
     pub array_layers: u32,
     pub tiling: vk::ImageTiling,
@@ -192,9 +308,9 @@ pub struct ImageDesc<'a> {
 impl Default for ImageDesc<'_> {
     fn default() -> Self {
         Self {
-            format: vk::Format::UNDEFINED,
+            format: Format::UNDEFINED,
             ty: vk::ImageType::TYPE_2D,
-            extent: vk::Extent3D::default(),
+            extent: Extent3D::default(),
             mip_levels: 1,
             array_layers: 1,
             tiling: vk::ImageTiling::OPTIMAL,
@@ -215,8 +331,8 @@ pub struct ViewImageDesc<'a> {
     pub image: ImageDesc<'a>,
     pub sampler: Option<SamplerCreateInfo<'a>>,
     pub view_type: Option<vk::ImageViewType>,
-    pub view_format: Option<vk::Format>,
-    pub aspect: Option<vk::ImageAspectFlags>,
+    pub view_format: Option<Format>,
+    pub aspect: Option<ImageAspect>,
     pub swizzle: vk::ComponentMapping,
     pub view_mips: Option<ops::Range<u32>>,
     pub view_layers: Option<ops::Range<u32>>,
@@ -241,8 +357,8 @@ impl Default for ViewImageDesc<'_> {
 
 #[derive(Debug, Clone)]
 pub struct Texture2DDesc<'a> {
-    pub size: [u32; 2],
-    pub format: vk::Format,
+    pub size: Extent2D,
+    pub format: Format,
     pub usage: TextureUses,
     pub memory: MemoryPreset,
     pub sampler: Option<SamplerCreateInfo<'a>>,
@@ -250,7 +366,7 @@ pub struct Texture2DDesc<'a> {
     pub array_layers: u32,
     pub samples: vk::SampleCountFlags,
     pub tiling: vk::ImageTiling,
-    pub view_format: Option<vk::Format>,
+    pub view_format: Option<Format>,
     pub label: Option<Label<'a>>,
     pub view_label: Option<Label<'a>>,
 }
@@ -258,8 +374,8 @@ pub struct Texture2DDesc<'a> {
 impl Default for Texture2DDesc<'_> {
     fn default() -> Self {
         Self {
-            size: [0, 0],
-            format: vk::Format::UNDEFINED,
+            size: Extent2D::default(),
+            format: Format::UNDEFINED,
             usage: TextureUses::empty(),
             memory: MemoryPreset::GpuOnly,
             sampler: None,
@@ -328,12 +444,12 @@ impl From<ImageFlags> for vk::ImageCreateFlags {
 }
 
 fn validate_texture_2d_desc(desc: &Texture2DDesc<'_>) -> Result<(), GPUError> {
-    if desc.size[0] == 0 || desc.size[1] == 0 {
+    if desc.size.width == 0 || desc.size.height == 0 {
         return Err(GPUError::Validation(
             "2D texture size must be greater than zero",
         ));
     }
-    if desc.format == vk::Format::UNDEFINED {
+    if desc.format == Format::UNDEFINED {
         return Err(GPUError::Validation("2D texture format must be defined"));
     }
     if desc.mip_levels == 0 {
@@ -401,7 +517,7 @@ fn validate_texture_2d_desc(desc: &Texture2DDesc<'_>) -> Result<(), GPUError> {
 }
 
 fn validate_image_desc(desc: &ImageDesc<'_>) -> Result<(), GPUError> {
-    if desc.format == vk::Format::UNDEFINED {
+    if desc.format == Format::UNDEFINED {
         return Err(GPUError::Validation("image format must be defined"));
     }
     if desc.extent.width == 0 || desc.extent.height == 0 || desc.extent.depth == 0 {
@@ -554,7 +670,7 @@ fn validate_view_image_desc(desc: &ViewImageDesc<'_>) -> Result<(), GPUError> {
     Ok(())
 }
 
-fn infer_image_aspect(format: vk::Format, usage: ImageUses) -> vk::ImageAspectFlags {
+fn infer_image_aspect(format: Format, usage: ImageUses) -> ImageAspect {
     if usage.contains(ImageUses::DEPTH_STENCIL_ATTACHMENT) {
         return depth_stencil_aspect(format);
     }
@@ -564,7 +680,7 @@ fn infer_image_aspect(format: vk::Format, usage: ImageUses) -> vk::ImageAspectFl
         return depth_stencil;
     }
 
-    vk::ImageAspectFlags::COLOR
+    ImageAspect::COLOR
 }
 
 fn infer_image_view_type(desc: &ImageDesc<'_>) -> vk::ImageViewType {
@@ -585,25 +701,21 @@ fn infer_image_view_type(desc: &ImageDesc<'_>) -> vk::ImageViewType {
     }
 }
 
-fn depth_stencil_aspect(format: vk::Format) -> vk::ImageAspectFlags {
+fn depth_stencil_aspect(format: Format) -> ImageAspect {
     match format {
-        vk::Format::D16_UNORM | vk::Format::X8_D24_UNORM_PACK32 | vk::Format::D32_SFLOAT => {
-            vk::ImageAspectFlags::DEPTH
+        Format::D16_UNORM | Format::X8_D24_UNORM_PACK32 | Format::D32_SFLOAT => ImageAspect::DEPTH,
+        Format::S8_UINT => ImageAspect::STENCIL,
+        Format::D16_UNORM_S8_UINT | Format::D24_UNORM_S8_UINT | Format::D32_SFLOAT_S8_UINT => {
+            ImageAspect::DEPTH_STENCIL
         }
-        vk::Format::S8_UINT => vk::ImageAspectFlags::STENCIL,
-        vk::Format::D16_UNORM_S8_UINT
-        | vk::Format::D24_UNORM_S8_UINT
-        | vk::Format::D32_SFLOAT_S8_UINT => {
-            vk::ImageAspectFlags::DEPTH | vk::ImageAspectFlags::STENCIL
-        }
-        _ => vk::ImageAspectFlags::empty(),
+        _ => ImageAspect::empty(),
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct Image {
     pub inner: Arc<ImageImpl>,
-    pub format: vk::Format,
+    pub format: Format,
 }
 
 pub struct ImageImpl {
@@ -614,7 +726,7 @@ pub struct ImageImpl {
 
 #[derive(Debug, Clone)]
 pub struct ImageView {
-    pub inner: ImageViewImpl,
+    pub inner: Arc<ImageViewImpl>,
     pub sampler: Option<Sampler>,
 }
 
@@ -646,14 +758,14 @@ pub struct ViewImage {
 // TODO: detach from vulkan
 #[derive(Debug, Clone)]
 pub struct SamplerCreateInfo<'a> {
-    pub mag: vk::Filter,
-    pub min: vk::Filter,
-    pub mipmap: vk::SamplerMipmapMode,
-    pub address_u: vk::SamplerAddressMode,
-    pub address_v: vk::SamplerAddressMode,
-    pub address_w: vk::SamplerAddressMode,
+    pub mag: Filter,
+    pub min: Filter,
+    pub mipmap: SamplerMipmapMode,
+    pub address_u: SamplerAddressMode,
+    pub address_v: SamplerAddressMode,
+    pub address_w: SamplerAddressMode,
     pub anisotropy: Option<f32>,
-    pub compare: Option<vk::CompareOp>,
+    pub compare: Option<CompareOp>,
     pub min_lod: f32,
     pub max_lod: f32,
     pub label: Option<Label<'a>>,
@@ -662,12 +774,12 @@ pub struct SamplerCreateInfo<'a> {
 impl<'a> Default for SamplerCreateInfo<'a> {
     fn default() -> Self {
         Self {
-            mag: vk::Filter::LINEAR,
-            min: vk::Filter::LINEAR,
-            mipmap: vk::SamplerMipmapMode::LINEAR,
-            address_u: vk::SamplerAddressMode::CLAMP_TO_EDGE,
-            address_v: vk::SamplerAddressMode::CLAMP_TO_EDGE,
-            address_w: vk::SamplerAddressMode::CLAMP_TO_EDGE,
+            mag: Filter::Linear,
+            min: Filter::Linear,
+            mipmap: SamplerMipmapMode::Linear,
+            address_u: SamplerAddressMode::ClampToEdge,
+            address_v: SamplerAddressMode::ClampToEdge,
+            address_w: SamplerAddressMode::ClampToEdge,
             anisotropy: None,
             compare: None,
             min_lod: 0.0,
@@ -681,8 +793,8 @@ impl<'a> Default for SamplerCreateInfo<'a> {
 pub struct ImageViewOptions<'a> {
     pub sampler: Option<&'a Sampler>,
     pub ty: vk::ImageViewType,
-    pub format: Option<vk::Format>,
-    pub aspect: vk::ImageAspectFlags,
+    pub format: Option<Format>,
+    pub aspect: ImageAspect,
     pub swizzle: vk::ComponentMapping,
     pub mips: ops::Range<u32>,
     pub layers: ops::Range<u32>,
@@ -697,9 +809,9 @@ pub struct ImageViewCreateInfo<'a> {
 
 #[derive(Debug, Default)]
 pub(crate) struct ImageCreateInfo<'a> {
-    pub format: vk::Format,
+    pub format: Format,
     pub ty: vk::ImageType,
-    pub volume: vk::Extent3D,
+    pub volume: Extent3D,
     pub mips: u32,
     pub layers: u32,
     pub tiling: vk::ImageTiling,
@@ -725,7 +837,120 @@ pub struct CopyBufferToImageInfo<'a> {
     pub src: &'a Buffer,
     pub dst: &'a Image,
     pub dst_layout: ImageLayout,
-    pub regions: &'a [vk::BufferImageCopy],
+    pub regions: &'a [BufferImageCopy],
+}
+
+#[derive(Debug, Copy, Clone)]
+pub struct ImageSubresourceLayers {
+    pub aspect: ImageAspect,
+    pub mip_level: u32,
+    pub base_array_layer: u32,
+    pub layer_count: u32,
+}
+
+impl ImageSubresourceLayers {
+    pub const fn new(aspect: ImageAspect) -> Self {
+        Self {
+            aspect,
+            mip_level: 0,
+            base_array_layer: 0,
+            layer_count: 1,
+        }
+    }
+
+    pub const fn color() -> Self {
+        Self::new(ImageAspect::COLOR)
+    }
+
+    pub const fn depth() -> Self {
+        Self::new(ImageAspect::DEPTH)
+    }
+
+    pub fn mip_level(mut self, mip_level: u32) -> Self {
+        self.mip_level = mip_level;
+        self
+    }
+
+    pub fn base_array_layer(mut self, base_array_layer: u32) -> Self {
+        self.base_array_layer = base_array_layer;
+        self
+    }
+
+    pub fn layer_count(mut self, layer_count: u32) -> Self {
+        self.layer_count = layer_count;
+        self
+    }
+
+    fn into_vk(self) -> vk::ImageSubresourceLayers {
+        vk::ImageSubresourceLayers::default()
+            .aspect_mask(self.aspect.into())
+            .mip_level(self.mip_level)
+            .base_array_layer(self.base_array_layer)
+            .layer_count(self.layer_count)
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub struct BufferImageCopy {
+    pub buffer_offset: u64,
+    pub buffer_row_length: u32,
+    pub buffer_image_height: u32,
+    pub image_subresource: ImageSubresourceLayers,
+    pub image_offset: Offset3D,
+    pub image_extent: Extent3D,
+}
+
+impl BufferImageCopy {
+    pub const fn new(image_subresource: ImageSubresourceLayers, image_extent: Extent3D) -> Self {
+        Self {
+            buffer_offset: 0,
+            buffer_row_length: 0,
+            buffer_image_height: 0,
+            image_subresource,
+            image_offset: Offset3D::ZERO,
+            image_extent,
+        }
+    }
+
+    pub const fn image_2d(aspect: ImageAspect, extent: Extent2D) -> Self {
+        Self::new(ImageSubresourceLayers::new(aspect), extent.to_3d(1))
+    }
+
+    pub fn buffer_offset(mut self, buffer_offset: u64) -> Self {
+        self.buffer_offset = buffer_offset;
+        self
+    }
+
+    pub fn buffer_row_length(mut self, buffer_row_length: u32) -> Self {
+        self.buffer_row_length = buffer_row_length;
+        self
+    }
+
+    pub fn buffer_image_height(mut self, buffer_image_height: u32) -> Self {
+        self.buffer_image_height = buffer_image_height;
+        self
+    }
+
+    pub fn image_offset(mut self, image_offset: Offset3D) -> Self {
+        self.image_offset = image_offset;
+        self
+    }
+
+    fn into_vk(self) -> vk::BufferImageCopy {
+        vk::BufferImageCopy::default()
+            .buffer_offset(self.buffer_offset)
+            .buffer_row_length(self.buffer_row_length)
+            .buffer_image_height(self.buffer_image_height)
+            .image_subresource(self.image_subresource.into_vk())
+            .image_offset(self.image_offset.into())
+            .image_extent(self.image_extent.into())
+    }
+}
+
+impl From<BufferImageCopy> for vk::BufferImageCopy {
+    fn from(value: BufferImageCopy) -> Self {
+        value.into_vk()
+    }
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -735,24 +960,28 @@ pub struct BlitImageInfo<'a> {
     pub dst: &'a Image,
     pub dst_layout: ImageLayout,
     pub regions: &'a [vk::ImageBlit],
-    pub filter: vk::Filter,
+    pub filter: Filter,
 }
 
 impl SamplerImpl {
     pub unsafe fn new(device: RawDevice, info: &SamplerCreateInfo<'_>) -> Result<Self, GPUError> {
         let mut create_info = vk::SamplerCreateInfo::default()
-            .mag_filter(info.mag)
-            .min_filter(info.min)
-            .mipmap_mode(info.mipmap)
-            .address_mode_u(info.address_u)
-            .address_mode_v(info.address_v)
-            .address_mode_w(info.address_w)
+            .mag_filter(info.mag.into())
+            .min_filter(info.min.into())
+            .mipmap_mode(info.mipmap.into())
+            .address_mode_u(info.address_u.into())
+            .address_mode_v(info.address_v.into())
+            .address_mode_w(info.address_w.into())
             .min_lod(info.min_lod)
             .max_lod(info.max_lod);
 
         if let Some(anisotropy) = info.anisotropy {
             create_info.anisotropy_enable = 1;
             create_info.max_anisotropy = anisotropy;
+        }
+        if let Some(compare) = info.compare {
+            create_info.compare_enable = 1;
+            create_info.compare_op = compare.into();
         }
 
         let handle = unsafe { device.handle.create_sampler(&create_info, None) }?;
@@ -771,11 +1000,11 @@ impl ImageViewImpl {
         let mut create_info = vk::ImageViewCreateInfo::default()
             .image(info.image.inner.handle)
             .view_type(options.ty)
-            .format(info.image.format)
+            .format(info.image.format.into())
             .components(options.swizzle)
             .subresource_range(
                 vk::ImageSubresourceRange::default()
-                    .aspect_mask(options.aspect)
+                    .aspect_mask(options.aspect.into())
                     .base_mip_level(options.mips.start)
                     .level_count(options.mips.len() as u32)
                     .base_array_layer(options.layers.start)
@@ -783,7 +1012,7 @@ impl ImageViewImpl {
             );
 
         if let Some(format) = options.format {
-            create_info.format = format;
+            create_info.format = format.into();
         }
 
         let handle = unsafe { device.handle.create_image_view(&create_info, None) }?;
@@ -808,8 +1037,8 @@ impl ImageImpl {
     ) -> Result<Self, GPUError> {
         let image_info = vk::ImageCreateInfo::default()
             .image_type(info.ty)
-            .format(info.format)
-            .extent(info.volume)
+            .format(info.format.into())
+            .extent(info.volume.into())
             .mip_levels(info.mips)
             .array_layers(info.layers)
             .samples(info.samples)
@@ -890,7 +1119,10 @@ impl Device {
     ) -> Result<ImageView, GPUError> {
         let inner = unsafe { ImageViewImpl::new(self.inner.clone(), info)? };
         let sampler = info.options.sampler.cloned();
-        Ok(ImageView { inner, sampler })
+        Ok(ImageView {
+            inner: Arc::new(inner),
+            sampler,
+        })
     }
 
     pub fn create_image_view(&self, info: &ImageViewCreateInfo<'_>) -> ImageView {
@@ -997,11 +1229,7 @@ impl Device {
             image: ImageDesc {
                 format: desc.format,
                 ty: vk::ImageType::TYPE_2D,
-                extent: vk::Extent3D {
-                    width: desc.size[0],
-                    height: desc.size[1],
-                    depth: 1,
-                },
+                extent: desc.size.to_3d(1),
                 mip_levels: desc.mip_levels,
                 array_layers: desc.array_layers,
                 tiling: desc.tiling,
@@ -1031,6 +1259,7 @@ pub enum ImageLayout {
     Compute,
     Fragment,
     Color,
+    DepthStencil,
     TransferDst,
     Present,
     Custom(vk::ImageLayout),
@@ -1053,7 +1282,7 @@ impl Default for ImageLayout {
 pub struct ImageTransition<'a> {
     pub from: ImageLayoutTransition,
     pub to: ImageLayoutTransition,
-    pub aspect: vk::ImageAspectFlags,
+    pub aspect: ImageAspect,
     pub mips: ops::Range<u32>,
     pub layers: ops::Range<u32>,
     pub queue: Option<(&'a Queue, &'a Queue)>,
@@ -1065,7 +1294,7 @@ impl Default for ImageTransition<'_> {
         Self {
             from: ImageLayoutTransition::default(),
             to: ImageLayoutTransition::default(),
-            aspect: vk::ImageAspectFlags::empty(),
+            aspect: ImageAspect::empty(),
             mips: 0..1,
             layers: 0..1,
             queue: None,
@@ -1081,6 +1310,7 @@ impl ImageLayoutTransition {
     pub const COMPUTE: Self = Self::new(ImageLayout::Compute);
     pub const PRESENT: Self = Self::new(ImageLayout::Present);
     pub const COLOR: Self = Self::new(ImageLayout::Color);
+    pub const DEPTH_STENCIL: Self = Self::new(ImageLayout::DepthStencil);
 
     pub const fn new(layout: ImageLayout) -> Self {
         let (stage, access) = layout.infer_stage_flags();
@@ -1135,6 +1365,16 @@ impl ImageLayout {
                 vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
                 vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
             ),
+            ImageLayout::DepthStencil => (
+                vk::PipelineStageFlags2::from_raw(
+                    vk::PipelineStageFlags2::EARLY_FRAGMENT_TESTS.as_raw()
+                        | vk::PipelineStageFlags2::LATE_FRAGMENT_TESTS.as_raw(),
+                ),
+                vk::AccessFlags2::from_raw(
+                    vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_READ.as_raw()
+                        | vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE.as_raw(),
+                ),
+            ),
             ImageLayout::TransferDst => (
                 vk::PipelineStageFlags2::TRANSFER,
                 vk::AccessFlags2::TRANSFER_WRITE,
@@ -1157,6 +1397,7 @@ impl From<ImageLayout> for vk::ImageLayout {
             ImageLayout::Compute => vk::ImageLayout::GENERAL,
             ImageLayout::Fragment => vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
             ImageLayout::Color => vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+            ImageLayout::DepthStencil => vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
             ImageLayout::TransferDst => vk::ImageLayout::TRANSFER_DST_OPTIMAL,
             ImageLayout::Present => vk::ImageLayout::PRESENT_SRC_KHR,
             ImageLayout::Custom(layout) => layout,

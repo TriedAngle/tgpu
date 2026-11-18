@@ -2,7 +2,7 @@ use std::{ffi::CStr, fmt, sync::Arc};
 
 use ash::vk;
 
-use crate::{GPUError, raw::InstanceImpl};
+use crate::{Format, GPUError, raw::InstanceImpl};
 
 #[derive(Debug, Clone)]
 pub struct Adapter {
@@ -51,6 +51,8 @@ impl AdapterDescriptorIndexingFeatures {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct AdapterFeatures {
     pub fill_mode_non_solid: bool,
+    pub multi_draw_indirect: bool,
+    pub draw_indirect_first_instance: bool,
     pub descriptor_indexing: AdapterDescriptorIndexingFeatures,
     pub buffer_device_address: bool,
     pub shader_int64: bool,
@@ -148,7 +150,7 @@ pub struct AdapterImpl {
     pub properties: vk::PhysicalDeviceProperties,
     pub queue_properties: Arc<[vk::QueueFamilyProperties]>,
     pub features: AdapterFeatures,
-    pub formats: Arc<[(vk::Format, vk::FormatProperties)]>,
+    pub formats: Arc<[(Format, vk::FormatProperties)]>,
     pub info: AdapterInfo,
 }
 
@@ -156,7 +158,7 @@ impl AdapterImpl {
     pub unsafe fn new(
         instance: &InstanceImpl,
         pdev: vk::PhysicalDevice,
-        formats: &[vk::Format],
+        formats: &[Format],
     ) -> Self {
         let properties = unsafe { instance.properties(pdev) };
         let features = unsafe { instance.features(pdev) };
@@ -246,7 +248,7 @@ fn physical_device_name(properties: &vk::PhysicalDeviceProperties) -> String {
 }
 
 impl InstanceImpl {
-    pub unsafe fn adapters(&self, formats: &[vk::Format]) -> Result<Vec<AdapterImpl>, GPUError> {
+    pub unsafe fn adapters(&self, formats: &[Format]) -> Result<Vec<AdapterImpl>, GPUError> {
         let pdevs = unsafe {
             self.handle
                 .enumerate_physical_devices()

@@ -14,11 +14,12 @@ mod descriptor;
 mod device;
 #[cfg(feature = "egui")]
 pub mod egui;
+mod format;
+mod geometry;
 mod image;
 mod instance;
 mod pipeline;
 mod queue;
-mod render_graph;
 mod resource;
 mod shader;
 mod swapchain;
@@ -43,10 +44,7 @@ pub use adapter::{
 };
 pub use allocations::Allocation;
 pub use ash;
-pub use ash::vk::{
-    ColorSpaceKHR, CullModeFlags, Format, FrontFace, PolygonMode, PresentModeKHR,
-    PrimitiveTopology, QueueFlags, ShaderStageFlags,
-};
+pub use ash::vk::{QueueFlags, ShaderStageFlags};
 pub use bindless::{
     BINDLESS_READ_BUFFER_BINDING, BINDLESS_RW_BUFFER_BINDING, BINDLESS_SAMPLED_IMAGE_BINDING,
     BINDLESS_SAMPLER_BINDING, BINDLESS_STORAGE_IMAGE_BINDING, BINDLESS_UNIFORM_BUFFER_BINDING,
@@ -57,7 +55,8 @@ pub use buffer::{
     Buffer, BufferAccessTransition, BufferDesc, BufferTransition, BufferUses, CopyBufferInfo,
 };
 pub use command::{
-    CommandBuffer, CommandPools, CommandRecorder, RenderInfo, RenderRecorder, SubmitInfo,
+    AttachmentLoadOp, AttachmentStoreOp, ClearValue, CommandBuffer, CommandPools, CommandRecorder,
+    IndexType, PipelineStageFlags, RenderAttachment, RenderInfo, RenderRecorder, SubmitInfo,
     ThreadCommandPool,
 };
 pub use debug::Label;
@@ -66,24 +65,25 @@ pub use descriptor::{
     DescriptorSetLayout, DescriptorSetLayoutInfo, DescriptorType, DescriptorWrite,
 };
 pub use device::{Device, DeviceCreateInfo, DeviceFeatures};
+pub use format::{ColorSpace, Format, SurfaceFormat};
+pub use geometry::{Extent2D, Extent3D, Offset, Offset3D, Rect, Viewport};
 pub use image::{
-    BlitImageInfo, CopyBufferToImageInfo, CopyImageInfo, Image, ImageDesc, ImageFlags, ImageLayout,
-    ImageLayoutTransition, ImageTransition, ImageUses, ImageView, ImageViewCreateInfo,
-    ImageViewOptions, Sampler, SamplerCreateInfo, Texture2DDesc, TextureUses, ViewImage,
-    ViewImageDesc,
+    BlitImageInfo, BufferImageCopy, CopyBufferToImageInfo, CopyImageInfo, Filter, Image,
+    ImageAspect, ImageDesc, ImageFlags, ImageLayout, ImageLayoutTransition, ImageSubresourceLayers,
+    ImageTransition, ImageUses, ImageView, ImageViewCreateInfo, ImageViewOptions, Sampler,
+    SamplerAddressMode, SamplerCreateInfo, SamplerMipmapMode, Texture2DDesc, TextureUses,
+    ViewImage, ViewImageDesc,
 };
 pub use instance::{Instance, InstanceCreateInfo};
-pub use pipeline::{ComputePipeline, ComputePipelineInfo, RenderPipeline, RenderPipelineInfo};
-pub use queue::{Queue, QueueFamilyInfo, QueueRequest};
-pub use render_graph::{
-    BufferAccess, ColorAttachmentDesc, DepthAttachmentDesc, GraphBuffer, GraphImage, ImageAccess,
-    ImportedBufferDesc, ImportedImageDesc, PassQueue, RenderGraph, RenderGraphCache,
-    RenderGraphError, RenderGraphExecution, RenderGraphInfo, TransientBufferDesc,
-    TransientImageDesc,
+pub use pipeline::{
+    ColorBlend, CompareOp, ComputePipeline, ComputePipelineInfo, CullMode, FrontFace, PolygonMode,
+    PrimitiveTopology, RenderPipeline, RenderPipelineInfo, VertexAttribute, VertexBufferLayout,
+    VertexInput, VertexInputRate,
 };
+pub use queue::{Queue, QueueFamilyInfo, QueueRequest};
 pub use resource::{HostAccess, MemoryPreset};
 pub use shader::{Shader, ShaderEntry, ShaderSource};
-pub use swapchain::{Frame, Swapchain, SwapchainCreateInfo};
+pub use swapchain::{Frame, PresentMode, Swapchain, SwapchainCreateInfo};
 pub use sync::Semaphore;
 
 pub enum GPUError {

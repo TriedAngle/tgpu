@@ -1,7 +1,286 @@
 use ash::vk;
 use std::sync::Arc;
 
-use crate::{DescriptorSetLayout, Device, Label, ShaderEntry, raw::DeviceImpl};
+use crate::{DescriptorSetLayout, Device, Format, Label, ShaderEntry, raw::DeviceImpl};
+
+#[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
+pub enum CompareOp {
+    Never,
+    Less,
+    Equal,
+    LessOrEqual,
+    Greater,
+    NotEqual,
+    GreaterOrEqual,
+    #[default]
+    Always,
+    Custom(vk::CompareOp),
+}
+
+impl From<CompareOp> for vk::CompareOp {
+    fn from(value: CompareOp) -> Self {
+        match value {
+            CompareOp::Never => vk::CompareOp::NEVER,
+            CompareOp::Less => vk::CompareOp::LESS,
+            CompareOp::Equal => vk::CompareOp::EQUAL,
+            CompareOp::LessOrEqual => vk::CompareOp::LESS_OR_EQUAL,
+            CompareOp::Greater => vk::CompareOp::GREATER,
+            CompareOp::NotEqual => vk::CompareOp::NOT_EQUAL,
+            CompareOp::GreaterOrEqual => vk::CompareOp::GREATER_OR_EQUAL,
+            CompareOp::Always => vk::CompareOp::ALWAYS,
+            CompareOp::Custom(raw) => raw,
+        }
+    }
+}
+
+impl From<vk::CompareOp> for CompareOp {
+    fn from(value: vk::CompareOp) -> Self {
+        match value {
+            vk::CompareOp::NEVER => Self::Never,
+            vk::CompareOp::LESS => Self::Less,
+            vk::CompareOp::EQUAL => Self::Equal,
+            vk::CompareOp::LESS_OR_EQUAL => Self::LessOrEqual,
+            vk::CompareOp::GREATER => Self::Greater,
+            vk::CompareOp::NOT_EQUAL => Self::NotEqual,
+            vk::CompareOp::GREATER_OR_EQUAL => Self::GreaterOrEqual,
+            vk::CompareOp::ALWAYS => Self::Always,
+            raw => Self::Custom(raw),
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
+pub enum PrimitiveTopology {
+    #[default]
+    TriangleList,
+    PointList,
+    LineList,
+    LineStrip,
+    TriangleStrip,
+    TriangleFan,
+    LineListWithAdjacency,
+    LineStripWithAdjacency,
+    TriangleListWithAdjacency,
+    TriangleStripWithAdjacency,
+    PatchList,
+    Custom(vk::PrimitiveTopology),
+}
+
+impl From<PrimitiveTopology> for vk::PrimitiveTopology {
+    fn from(value: PrimitiveTopology) -> Self {
+        match value {
+            PrimitiveTopology::TriangleList => vk::PrimitiveTopology::TRIANGLE_LIST,
+            PrimitiveTopology::PointList => vk::PrimitiveTopology::POINT_LIST,
+            PrimitiveTopology::LineList => vk::PrimitiveTopology::LINE_LIST,
+            PrimitiveTopology::LineStrip => vk::PrimitiveTopology::LINE_STRIP,
+            PrimitiveTopology::TriangleStrip => vk::PrimitiveTopology::TRIANGLE_STRIP,
+            PrimitiveTopology::TriangleFan => vk::PrimitiveTopology::TRIANGLE_FAN,
+            PrimitiveTopology::LineListWithAdjacency => {
+                vk::PrimitiveTopology::LINE_LIST_WITH_ADJACENCY
+            }
+            PrimitiveTopology::LineStripWithAdjacency => {
+                vk::PrimitiveTopology::LINE_STRIP_WITH_ADJACENCY
+            }
+            PrimitiveTopology::TriangleListWithAdjacency => {
+                vk::PrimitiveTopology::TRIANGLE_LIST_WITH_ADJACENCY
+            }
+            PrimitiveTopology::TriangleStripWithAdjacency => {
+                vk::PrimitiveTopology::TRIANGLE_STRIP_WITH_ADJACENCY
+            }
+            PrimitiveTopology::PatchList => vk::PrimitiveTopology::PATCH_LIST,
+            PrimitiveTopology::Custom(raw) => raw,
+        }
+    }
+}
+
+impl From<vk::PrimitiveTopology> for PrimitiveTopology {
+    fn from(value: vk::PrimitiveTopology) -> Self {
+        match value {
+            vk::PrimitiveTopology::TRIANGLE_LIST => Self::TriangleList,
+            vk::PrimitiveTopology::POINT_LIST => Self::PointList,
+            vk::PrimitiveTopology::LINE_LIST => Self::LineList,
+            vk::PrimitiveTopology::LINE_STRIP => Self::LineStrip,
+            vk::PrimitiveTopology::TRIANGLE_STRIP => Self::TriangleStrip,
+            vk::PrimitiveTopology::TRIANGLE_FAN => Self::TriangleFan,
+            vk::PrimitiveTopology::LINE_LIST_WITH_ADJACENCY => Self::LineListWithAdjacency,
+            vk::PrimitiveTopology::LINE_STRIP_WITH_ADJACENCY => Self::LineStripWithAdjacency,
+            vk::PrimitiveTopology::TRIANGLE_LIST_WITH_ADJACENCY => Self::TriangleListWithAdjacency,
+            vk::PrimitiveTopology::TRIANGLE_STRIP_WITH_ADJACENCY => {
+                Self::TriangleStripWithAdjacency
+            }
+            vk::PrimitiveTopology::PATCH_LIST => Self::PatchList,
+            raw => Self::Custom(raw),
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
+pub enum PolygonMode {
+    #[default]
+    Fill,
+    Line,
+    Point,
+    Custom(vk::PolygonMode),
+}
+
+impl From<PolygonMode> for vk::PolygonMode {
+    fn from(value: PolygonMode) -> Self {
+        match value {
+            PolygonMode::Fill => vk::PolygonMode::FILL,
+            PolygonMode::Line => vk::PolygonMode::LINE,
+            PolygonMode::Point => vk::PolygonMode::POINT,
+            PolygonMode::Custom(raw) => raw,
+        }
+    }
+}
+
+impl From<vk::PolygonMode> for PolygonMode {
+    fn from(value: vk::PolygonMode) -> Self {
+        match value {
+            vk::PolygonMode::FILL => Self::Fill,
+            vk::PolygonMode::LINE => Self::Line,
+            vk::PolygonMode::POINT => Self::Point,
+            raw => Self::Custom(raw),
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
+pub enum FrontFace {
+    #[default]
+    CounterClockwise,
+    Clockwise,
+    Custom(vk::FrontFace),
+}
+
+impl From<FrontFace> for vk::FrontFace {
+    fn from(value: FrontFace) -> Self {
+        match value {
+            FrontFace::CounterClockwise => vk::FrontFace::COUNTER_CLOCKWISE,
+            FrontFace::Clockwise => vk::FrontFace::CLOCKWISE,
+            FrontFace::Custom(raw) => raw,
+        }
+    }
+}
+
+impl From<vk::FrontFace> for FrontFace {
+    fn from(value: vk::FrontFace) -> Self {
+        match value {
+            vk::FrontFace::COUNTER_CLOCKWISE => Self::CounterClockwise,
+            vk::FrontFace::CLOCKWISE => Self::Clockwise,
+            raw => Self::Custom(raw),
+        }
+    }
+}
+
+bitflags::bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+    pub struct CullMode: u32 {
+        const NONE = 0;
+        const FRONT = 1 << 0;
+        const BACK = 1 << 1;
+        const FRONT_AND_BACK = 0b11;
+    }
+}
+
+impl From<CullMode> for vk::CullModeFlags {
+    fn from(value: CullMode) -> Self {
+        Self::from_raw(value.bits())
+    }
+}
+
+impl From<vk::CullModeFlags> for CullMode {
+    fn from(value: vk::CullModeFlags) -> Self {
+        Self::from_bits_retain(value.as_raw())
+    }
+}
+
+#[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
+pub enum VertexInputRate {
+    #[default]
+    Vertex,
+    Instance,
+    Custom(vk::VertexInputRate),
+}
+
+impl From<VertexInputRate> for vk::VertexInputRate {
+    fn from(value: VertexInputRate) -> Self {
+        match value {
+            VertexInputRate::Vertex => vk::VertexInputRate::VERTEX,
+            VertexInputRate::Instance => vk::VertexInputRate::INSTANCE,
+            VertexInputRate::Custom(raw) => raw,
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub struct VertexBufferLayout {
+    pub binding: u32,
+    pub stride: u32,
+    pub input_rate: VertexInputRate,
+}
+
+impl From<VertexBufferLayout> for vk::VertexInputBindingDescription {
+    fn from(value: VertexBufferLayout) -> Self {
+        Self {
+            binding: value.binding,
+            stride: value.stride,
+            input_rate: value.input_rate.into(),
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub struct VertexAttribute {
+    pub location: u32,
+    pub binding: u32,
+    pub format: Format,
+    pub offset: u32,
+}
+
+impl From<VertexAttribute> for vk::VertexInputAttributeDescription {
+    fn from(value: VertexAttribute) -> Self {
+        Self {
+            location: value.location,
+            binding: value.binding,
+            format: value.format.into(),
+            offset: value.offset,
+        }
+    }
+}
+
+#[derive(Debug, Copy, Clone)]
+pub struct VertexInput<'a> {
+    pub buffers: &'a [VertexBufferLayout],
+    pub attributes: &'a [VertexAttribute],
+}
+
+#[derive(Debug, Copy, Clone)]
+pub enum ColorBlend {
+    Disabled,
+    Alpha,
+    Custom(vk::PipelineColorBlendAttachmentState),
+}
+
+impl ColorBlend {
+    fn into_vk(self) -> vk::PipelineColorBlendAttachmentState {
+        match self {
+            Self::Disabled => vk::PipelineColorBlendAttachmentState::default()
+                .color_write_mask(vk::ColorComponentFlags::RGBA)
+                .blend_enable(false),
+            Self::Alpha => vk::PipelineColorBlendAttachmentState::default()
+                .blend_enable(true)
+                .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
+                .dst_color_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+                .color_blend_op(vk::BlendOp::ADD)
+                .src_alpha_blend_factor(vk::BlendFactor::SRC_ALPHA)
+                .dst_alpha_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
+                .alpha_blend_op(vk::BlendOp::ADD)
+                .color_write_mask(vk::ColorComponentFlags::RGBA),
+            Self::Custom(raw) => raw,
+        }
+    }
+}
 
 pub struct ComputePipelineInfo<'a> {
     pub shader: ShaderEntry<'a>,
@@ -26,19 +305,21 @@ impl Default for ComputePipelineInfo<'_> {
 pub struct RenderPipelineInfo<'a> {
     pub vertex_shader: ShaderEntry<'a>,
     pub fragment_shader: ShaderEntry<'a>,
-    pub color_formats: &'a [vk::Format],
-    pub depth_format: Option<vk::Format>,
+    pub color_formats: &'a [Format],
+    pub depth_format: Option<Format>,
     pub depth_test: bool,
     pub depth_write: bool,
-    pub depth_compare: vk::CompareOp,
+    pub depth_compare: CompareOp,
     pub descriptor_layouts: &'a [&'a DescriptorSetLayout],
     pub push_constant_size: Option<u32>,
+    pub blend: Option<&'a [ColorBlend]>,
     pub blend_states: Option<&'a [vk::PipelineColorBlendAttachmentState]>,
+    pub vertex_input: Option<VertexInput<'a>>,
     pub vertex_input_state: Option<vk::PipelineVertexInputStateCreateInfo<'a>>,
-    pub topology: vk::PrimitiveTopology,
-    pub polygon: vk::PolygonMode,
-    pub cull: vk::CullModeFlags,
-    pub front_face: vk::FrontFace,
+    pub topology: PrimitiveTopology,
+    pub polygon: PolygonMode,
+    pub cull: CullMode,
+    pub front_face: FrontFace,
     pub label: Option<Label<'a>>,
 }
 
@@ -51,15 +332,17 @@ impl Default for RenderPipelineInfo<'_> {
             depth_format: None,
             depth_test: false,
             depth_write: false,
-            depth_compare: vk::CompareOp::ALWAYS,
+            depth_compare: CompareOp::Always,
             descriptor_layouts: &[],
             push_constant_size: None,
+            blend: None,
             blend_states: None,
+            vertex_input: None,
             vertex_input_state: None,
-            topology: vk::PrimitiveTopology::TRIANGLE_LIST,
-            polygon: vk::PolygonMode::FILL,
-            cull: vk::CullModeFlags::NONE,
-            front_face: vk::FrontFace::COUNTER_CLOCKWISE,
+            topology: PrimitiveTopology::TriangleList,
+            polygon: PolygonMode::Fill,
+            cull: CullMode::NONE,
+            front_face: FrontFace::CounterClockwise,
             label: None,
         }
     }
@@ -138,10 +421,20 @@ impl RenderPipelineImpl {
                 .name(&fragment_stage_name),
         ];
 
-        let vertex_input = info.vertex_input_state.unwrap_or_default();
+        let vertex_bindings: Vec<vk::VertexInputBindingDescription>;
+        let vertex_attributes: Vec<vk::VertexInputAttributeDescription>;
+        let vertex_input = if let Some(input) = info.vertex_input {
+            vertex_bindings = input.buffers.iter().copied().map(Into::into).collect();
+            vertex_attributes = input.attributes.iter().copied().map(Into::into).collect();
+            vk::PipelineVertexInputStateCreateInfo::default()
+                .vertex_binding_descriptions(&vertex_bindings)
+                .vertex_attribute_descriptions(&vertex_attributes)
+        } else {
+            info.vertex_input_state.unwrap_or_default()
+        };
 
         let input_assembly = vk::PipelineInputAssemblyStateCreateInfo::default()
-            .topology(info.topology)
+            .topology(info.topology.into())
             .primitive_restart_enable(false);
 
         let viewport_state = vk::PipelineViewportStateCreateInfo::default()
@@ -152,10 +445,10 @@ impl RenderPipelineImpl {
             .depth_clamp_enable(false)
             .rasterizer_discard_enable(false)
             .depth_bias_enable(false)
-            .polygon_mode(info.polygon)
+            .polygon_mode(info.polygon.into())
             .line_width(1.0)
-            .cull_mode(info.cull)
-            .front_face(info.front_face);
+            .cull_mode(info.cull.into())
+            .front_face(info.front_face.into());
 
         let multisample = vk::PipelineMultisampleStateCreateInfo::default()
             .sample_shading_enable(false)
@@ -164,20 +457,17 @@ impl RenderPipelineImpl {
         let depth_stencil = vk::PipelineDepthStencilStateCreateInfo::default()
             .depth_test_enable(info.depth_test)
             .depth_write_enable(info.depth_write)
-            .depth_compare_op(info.depth_compare)
+            .depth_compare_op(info.depth_compare.into())
             .depth_bounds_test_enable(false)
             .stencil_test_enable(false);
 
-        let color_blend_attachment = info.blend_states.as_ref().map_or_else(
-            || {
-                vec![
-                    vk::PipelineColorBlendAttachmentState::default()
-                        .color_write_mask(vk::ColorComponentFlags::RGBA)
-                        .blend_enable(false),
-                ]
-            },
-            |&states| states.to_vec(),
-        );
+        let color_blend_attachment = if let Some(blend) = info.blend {
+            blend.iter().copied().map(ColorBlend::into_vk).collect()
+        } else if let Some(states) = info.blend_states {
+            states.to_vec()
+        } else {
+            vec![ColorBlend::Disabled.into_vk()]
+        };
 
         let color_blend = vk::PipelineColorBlendStateCreateInfo::default()
             .logic_op_enable(false)
@@ -190,11 +480,18 @@ impl RenderPipelineImpl {
         let dynamic_state =
             vk::PipelineDynamicStateCreateInfo::default().dynamic_states(&dynamic_states);
 
+        let color_formats = info
+            .color_formats
+            .iter()
+            .copied()
+            .map(Into::into)
+            .collect::<Vec<vk::Format>>();
+
         let mut rendering_info =
-            vk::PipelineRenderingCreateInfo::default().color_attachment_formats(info.color_formats);
+            vk::PipelineRenderingCreateInfo::default().color_attachment_formats(&color_formats);
 
         if let Some(format) = info.depth_format {
-            rendering_info = rendering_info.depth_attachment_format(format);
+            rendering_info = rendering_info.depth_attachment_format(format.into());
         }
 
         let mut create_info = vk::GraphicsPipelineCreateInfo::default()

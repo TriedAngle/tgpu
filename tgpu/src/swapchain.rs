@@ -3,14 +3,50 @@ use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
 use std::sync::Arc;
 
 use crate::{
-    Device, GPUError, Image, ImageView, Queue, Semaphore,
+    Device, Extent2D, Format, GPUError, Image, ImageView, Queue, Semaphore, SurfaceFormat,
     raw::{DeviceImpl, ImageImpl, ImageViewImpl, QueueImpl, RawAdapter, RawDevice, SemaphoreImpl},
 };
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
+pub enum PresentMode {
+    Immediate,
+    Mailbox,
+    #[default]
+    Fifo,
+    FifoRelaxed,
+    Custom(vk::PresentModeKHR),
+}
+
+impl From<PresentMode> for vk::PresentModeKHR {
+    fn from(value: PresentMode) -> Self {
+        match value {
+            PresentMode::Immediate => vk::PresentModeKHR::IMMEDIATE,
+            PresentMode::Mailbox => vk::PresentModeKHR::MAILBOX,
+            PresentMode::Fifo => vk::PresentModeKHR::FIFO,
+            PresentMode::FifoRelaxed => vk::PresentModeKHR::FIFO_RELAXED,
+            PresentMode::Custom(raw) => raw,
+        }
+    }
+}
+
+impl From<vk::PresentModeKHR> for PresentMode {
+    fn from(value: vk::PresentModeKHR) -> Self {
+        match value {
+            vk::PresentModeKHR::IMMEDIATE => Self::Immediate,
+            vk::PresentModeKHR::MAILBOX => Self::Mailbox,
+            vk::PresentModeKHR::FIFO => Self::Fifo,
+            vk::PresentModeKHR::FIFO_RELAXED => Self::FifoRelaxed,
+            raw => Self::Custom(raw),
+        }
+    }
+}
 
 #[derive(Debug, Copy, Clone)]
 pub struct Frame {
     pub index: u32,
+    pub flight_index: usize,
     pub suboptimal: bool,
+    pub out_of_date: bool,
 }
 
 pub struct Swapchain {
@@ -20,10 +56,10 @@ pub struct Swapchain {
 pub struct SwapchainCreateInfo {
     pub display: RawDisplayHandle,
     pub window: RawWindowHandle,
-    pub preferred_extent: vk::Extent2D,
+    pub preferred_extent: Extent2D,
     pub preferred_image_count: usize,
-    pub preferred_present_mode: vk::PresentModeKHR,
-    pub format_selector: Box<dyn Fn(&[vk::SurfaceFormatKHR]) -> vk::SurfaceFormatKHR>,
+    pub preferred_present_mode: PresentMode,
+    pub format_selector: Box<dyn Fn(&[SurfaceFormat]) -> SurfaceFormat>,
 }
 
 #[derive(Debug)]
@@ -32,8 +68,8 @@ pub struct SwapchainImplResources {
     pub images: Vec<Image>,
     pub views: Vec<ImageView>,
     pub capabilities: vk::SurfaceCapabilitiesKHR,
-    pub extent: vk::Extent2D,
-    pub present_mode: vk::PresentModeKHR,
+    pub extent: Extent2D,
+    pub present_mode: PresentMode,
     pub device: RawDevice,
 }
 
@@ -46,17 +82,17 @@ pub struct SwapchainImpl {
 
     pub available: Vec<Semaphore>,
     pub finished: Vec<Semaphore>,
-    pub flight: Vec<vk::Fence>,
     pub frame: usize,
 
     pub resources: SwapchainImplResources,
 
     pub max_flight: usize,
-    pub preferred_extent: vk::Extent2D,
-    pub preferred_present_mode: vk::PresentModeKHR,
-    pub formats: Arc<[vk::SurfaceFormatKHR]>,
-    pub format: vk::SurfaceFormatKHR,
-    pub present_modes: Arc<[vk::PresentModeKHR]>,
+    pub preferred_extent: Extent2D,
+    pub preferred_image_count: u32,
+    pub preferred_present_mode: PresentMode,
+    pub formats: Arc<[SurfaceFormat]>,
+    pub format: SurfaceFormat,
+    pub present_modes: Arc<[PresentMode]>,
 }
 
 impl SwapchainImpl {
@@ -76,6 +112,10 @@ impl SwapchainImpl {
                 .get_physical_device_surface_formats(adapter.handle, surface)
                 .map_err(GPUError::from)?
         };
+        let formats = formats
+            .into_iter()
+            .map(SurfaceFormat::from)
+            .collect::<Vec<_>>();
         let format = (info.format_selector)(&formats);
         log::info!("format: {:?}", format);
 
@@ -84,9 +124,10 @@ impl SwapchainImpl {
                 .get_physical_device_surface_present_modes(adapter.handle, surface)
                 .map_err(GPUError::from)?
         };
-
-        let (available, finished, flight) =
-            Self::create_syncs(device.clone(), info.preferred_image_count)?;
+        let present_modes = present_modes
+            .into_iter()
+            .map(PresentMode::from)
+            .collect::<Vec<_>>();
 
         let resources = Self::create_resources(
             device.clone(),
@@ -100,6 +141,9 @@ impl SwapchainImpl {
             format,
             None,
         )?;
+        let max_flight = resources.images.len();
+
+        let (available, finished) = Self::create_syncs(device.clone(), max_flight);
 
         let new = Self {
             device,
@@ -110,13 +154,13 @@ impl SwapchainImpl {
 
             available,
             finished,
-            flight,
             frame: 0,
 
             resources,
 
-            max_flight: info.preferred_image_count,
+            max_flight,
             preferred_extent: info.preferred_extent,
+            preferred_image_count: info.preferred_image_count as u32,
             preferred_present_mode: info.preferred_present_mode,
             formats: Arc::from(formats),
             format,
@@ -126,15 +170,9 @@ impl SwapchainImpl {
         Ok(new)
     }
 
-    fn create_syncs(
-        device: RawDevice,
-        max_flight: usize,
-    ) -> Result<(Vec<Semaphore>, Vec<Semaphore>, Vec<vk::Fence>), GPUError> {
+    fn create_syncs(device: RawDevice, max_flight: usize) -> (Vec<Semaphore>, Vec<Semaphore>) {
         let mut available = Vec::with_capacity(max_flight);
         let mut finished = Vec::with_capacity(max_flight);
-        let mut flight = Vec::with_capacity(max_flight);
-
-        let fence_info = vk::FenceCreateInfo::default().flags(vk::FenceCreateFlags::SIGNALED);
 
         for _ in 0..max_flight {
             let inner_available = unsafe { SemaphoreImpl::new_signal(device.clone()) };
@@ -147,19 +185,11 @@ impl SwapchainImpl {
                 inner: Arc::new(inner_finished),
             };
 
-            let flight_fence = unsafe {
-                device
-                    .handle
-                    .create_fence(&fence_info, None)
-                    .map_err(GPUError::from)?
-            };
-
             available.push(availabe_semaphore);
             finished.push(finished_semaphore);
-            flight.push(flight_fence);
         }
 
-        Ok((available, finished, flight))
+        (available, finished)
     }
 
     fn create_resources(
@@ -168,10 +198,10 @@ impl SwapchainImpl {
         surface_handle: vk::SurfaceKHR,
         surface_loader: &ash::khr::surface::Instance,
         adapter_handle: vk::PhysicalDevice,
-        preferred_extent: vk::Extent2D,
+        preferred_extent: Extent2D,
         preferred_image_count: u32,
-        preferred_present_mode: vk::PresentModeKHR,
-        format: vk::SurfaceFormatKHR,
+        preferred_present_mode: PresentMode,
+        format: SurfaceFormat,
         old_swapchain: Option<vk::SwapchainKHR>,
     ) -> Result<SwapchainImplResources, GPUError> {
         let capabilities = unsafe {
@@ -208,6 +238,10 @@ impl SwapchainImpl {
             surface_loader
                 .get_physical_device_surface_present_modes(adapter_handle, surface_handle)?
         };
+        let present_modes = present_modes
+            .into_iter()
+            .map(PresentMode::from)
+            .collect::<Vec<_>>();
 
         let present_mode = if present_modes.contains(&preferred_present_mode) {
             preferred_present_mode
@@ -215,32 +249,32 @@ impl SwapchainImpl {
             present_modes
                 .iter()
                 .copied()
-                .find(|&mode| mode == vk::PresentModeKHR::MAILBOX)
+                .find(|&mode| mode == PresentMode::Mailbox)
                 .or_else(|| {
                     log::warn!("Present mode: MAILBOX not found, falling back to Immediate");
                     present_modes
                         .iter()
                         .copied()
-                        .find(|&mode| mode == vk::PresentModeKHR::IMMEDIATE)
+                        .find(|&mode| mode == PresentMode::Immediate)
                 })
                 .unwrap_or_else(|| {
                     log::warn!("Present mode: IMMEDIATE not found, falling back to Fifo");
-                    vk::PresentModeKHR::FIFO
+                    PresentMode::Fifo
                 })
         };
 
         let info = vk::SwapchainCreateInfoKHR::default()
             .surface(surface_handle)
             .min_image_count(image_count)
-            .image_format(format.format)
-            .image_color_space(format.color_space)
+            .image_format(format.format.into())
+            .image_color_space(format.color_space.into())
             .image_extent(extent)
             .image_array_layers(1)
             .image_usage(vk::ImageUsageFlags::COLOR_ATTACHMENT | vk::ImageUsageFlags::TRANSFER_DST)
             .image_sharing_mode(vk::SharingMode::EXCLUSIVE)
             .pre_transform(capabilities.current_transform)
             .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
-            .present_mode(present_mode)
+            .present_mode(present_mode.into())
             .clipped(true)
             .old_swapchain(old_swapchain.unwrap_or(vk::SwapchainKHR::null()));
 
@@ -276,7 +310,7 @@ impl SwapchainImpl {
             images,
             views,
             capabilities,
-            extent,
+            extent: extent.into(),
             present_mode,
             device,
         };
@@ -287,7 +321,7 @@ impl SwapchainImpl {
     fn create_image_views(
         device: RawDevice,
         images: &[Image],
-        format: vk::SurfaceFormatKHR,
+        format: SurfaceFormat,
     ) -> Vec<ImageView> {
         images
             .iter()
@@ -295,7 +329,7 @@ impl SwapchainImpl {
                 let info = vk::ImageViewCreateInfo::default()
                     .image(img.inner.handle)
                     .view_type(vk::ImageViewType::TYPE_2D)
-                    .format(format.format)
+                    .format(format.format.into())
                     .components(vk::ComponentMapping {
                         r: vk::ComponentSwizzle::IDENTITY,
                         g: vk::ComponentSwizzle::IDENTITY,
@@ -317,11 +351,11 @@ impl SwapchainImpl {
 
                 ImageView {
                     sampler: None,
-                    inner: ImageViewImpl {
+                    inner: Arc::new(ImageViewImpl {
                         handle,
                         device: device.clone(),
                         image: img.inner.clone(),
-                    },
+                    }),
                 }
             })
             .collect()
@@ -345,11 +379,8 @@ impl SwapchainImpl {
     }
 
     pub fn acquire_next(&mut self, timeout: Option<u64>) -> Result<Frame, GPUError> {
-        let flight_fence = self.flight[self.frame];
-        let available_semaphore = &self.available[self.frame];
-
-        unsafe { self.device.wait_fence(flight_fence, timeout) };
-        unsafe { self.device.reset_fence(flight_fence) };
+        let flight_index = self.frame;
+        let available_semaphore = &self.available[flight_index];
 
         let timeout_ns = timeout.unwrap_or(u64::MAX);
         let (image_index, suboptimal) = unsafe {
@@ -363,7 +394,9 @@ impl SwapchainImpl {
                 Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => {
                     return Ok(Frame {
                         index: 0,
+                        flight_index,
                         suboptimal: true,
+                        out_of_date: true,
                     });
                 }
                 Err(e) => return Err(GPUError::Vulkan(e)),
@@ -372,7 +405,9 @@ impl SwapchainImpl {
 
         Ok(Frame {
             index: image_index,
+            flight_index,
             suboptimal,
+            out_of_date: false,
         })
     }
 
@@ -385,7 +420,11 @@ impl SwapchainImpl {
     }
 
     pub fn present(&mut self, queue: &QueueImpl, frame: Frame) -> Result<bool, GPUError> {
-        let finished_semaphore = &self.finished[self.frame];
+        if frame.out_of_date {
+            return Ok(true);
+        }
+
+        let finished_semaphore = &self.finished[frame.index as usize];
 
         let swapchains = [self.resources.handle];
         let image_indices = [frame.index];
@@ -406,18 +445,11 @@ impl SwapchainImpl {
     }
 
     pub fn available_semaphore(&self, frame: Frame) -> &Semaphore {
-        let _ = frame;
-        &self.available[self.frame]
+        &self.available[frame.flight_index]
     }
 
     pub fn finished_semaphore(&self, frame: Frame) -> &Semaphore {
-        let _ = frame;
-        &self.finished[self.frame]
-    }
-
-    pub fn fence(&self, frame: Frame) -> vk::Fence {
-        let _ = frame;
-        self.flight[self.frame]
+        &self.finished[frame.index as usize]
     }
 
     pub fn recreate(&mut self) -> Result<(), GPUError> {
@@ -429,26 +461,21 @@ impl SwapchainImpl {
             &self.surface_loader,
             self.device.adapter.handle,
             self.preferred_extent,
-            self.resources.images.len() as u32,
+            self.preferred_image_count,
             self.preferred_present_mode,
             self.format,
             Some(self.resources.handle),
         )?;
 
-        let (available, finished, flight) =
-            Self::create_syncs(self.device.clone(), new.images.len())?;
+        let (available, finished) = Self::create_syncs(self.device.clone(), new.images.len());
 
         unsafe {
             self.loader.destroy_swapchain(self.resources.handle, None);
-            for &fence in &self.flight {
-                self.device.handle.destroy_fence(fence, None);
-            }
         }
 
         self.resources = new;
         self.available = available;
         self.finished = finished;
-        self.flight = flight;
         self.max_flight = self.available.len();
         self.frame = 0;
         Ok(())
@@ -456,11 +483,11 @@ impl SwapchainImpl {
 }
 
 impl Swapchain {
-    pub fn set_preferred_extent(&mut self, extent: vk::Extent2D) {
+    pub fn set_preferred_extent(&mut self, extent: Extent2D) {
         self.inner.preferred_extent = extent;
     }
 
-    pub fn set_preferred_present_mode(&mut self, present_mode: vk::PresentModeKHR) {
+    pub fn set_preferred_present_mode(&mut self, present_mode: PresentMode) {
         self.inner.preferred_present_mode = present_mode;
     }
 
@@ -484,33 +511,48 @@ impl Swapchain {
         self.inner.view(frame)
     }
 
+    #[inline]
+    pub fn images(&self) -> &[Image] {
+        &self.inner.resources.images
+    }
+
+    #[inline]
+    pub fn available_semaphore(&self, frame: Frame) -> &Semaphore {
+        self.inner.available_semaphore(frame)
+    }
+
+    #[inline]
+    pub fn finished_semaphore(&self, frame: Frame) -> &Semaphore {
+        self.inner.finished_semaphore(frame)
+    }
+
     pub fn recreate(&mut self) -> Result<(), GPUError> {
         self.inner.recreate()?;
         Ok(())
     }
 
     #[inline]
-    pub fn preferred_present_mode(&self) -> vk::PresentModeKHR {
+    pub fn preferred_present_mode(&self) -> PresentMode {
         self.inner.preferred_present_mode
     }
 
     #[inline]
-    pub fn present_mode(&self) -> vk::PresentModeKHR {
+    pub fn present_mode(&self) -> PresentMode {
         self.inner.resources.present_mode
     }
 
     #[inline]
-    pub fn supported_present_modes(&self) -> &[vk::PresentModeKHR] {
+    pub fn supported_present_modes(&self) -> &[PresentMode] {
         self.inner.present_modes.as_ref()
     }
 
     #[inline]
-    pub fn format(&self) -> vk::Format {
+    pub fn format(&self) -> Format {
         self.inner.format.format
     }
 
     #[inline]
-    pub fn extent(&self) -> vk::Extent2D {
+    pub fn extent(&self) -> Extent2D {
         self.inner.resources.extent
     }
 
@@ -544,9 +586,6 @@ impl Drop for SwapchainImpl {
     fn drop(&mut self) {
         unsafe {
             self.device.wait_idle();
-            for &fence in &self.flight {
-                self.device.handle.destroy_fence(fence, None);
-            }
             self.loader.destroy_swapchain(self.resources.handle, None);
             self.surface_loader.destroy_surface(self.surface, None);
         }

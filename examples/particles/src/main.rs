@@ -1,6 +1,5 @@
 use rand::Rng;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
-use tgpu::ash::vk;
 
 use winit::{
     application::ApplicationHandler,
@@ -61,6 +60,7 @@ pub struct Render {
     pc: PushConstants,
 
     frame_count: usize,
+    frame_values: Vec<u64>,
 }
 
 impl Render {
@@ -96,18 +96,15 @@ impl Render {
         let swapchain = device.create_swapchain(&tgpu::SwapchainCreateInfo {
             display: window.display_handle().unwrap().as_raw(),
             window: window.window_handle().unwrap().as_raw(),
-            preferred_extent: vk::Extent2D {
-                width: size.width,
-                height: size.height,
-            },
+            preferred_extent: tgpu::Extent2D::new(size.width, size.height),
             preferred_image_count: 3,
-            preferred_present_mode: tgpu::PresentModeKHR::MAILBOX,
+            preferred_present_mode: tgpu::PresentMode::Mailbox,
             format_selector: Box::new(|formats| {
                 formats
                     .iter()
                     .find(|f| {
                         f.format == tgpu::Format::B8G8R8A8_SRGB
-                            && f.color_space == tgpu::ColorSpaceKHR::SRGB_NONLINEAR
+                            && f.color_space == tgpu::ColorSpace::SRGB_NONLINEAR
                     })
                     .copied()
                     .unwrap_or(formats[0])
@@ -147,11 +144,7 @@ impl Render {
             image: tgpu::ImageDesc {
                 label: Some(tgpu::Label::Name("present image")),
                 format: swapchain.format(),
-                extent: vk::Extent3D {
-                    width: swapchain.extent().width,
-                    height: swapchain.extent().height,
-                    depth: 1,
-                },
+                extent: swapchain.extent().to_3d(1),
                 usage: tgpu::ImageUses::COPY_SRC
                     | tgpu::ImageUses::COPY_DST
                     | tgpu::ImageUses::STORAGE
@@ -176,11 +169,9 @@ impl Render {
 
         let particle_buffer_handle = bindless.add_rw_buffer(&particle_buffer);
         let present_storage_image_handle =
-            bindless.add_storage_image(&present_image.view, vk::ImageLayout::GENERAL);
-        let present_texture_handle = bindless.add_sampled_image(
-            &present_image.view,
-            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
-        );
+            bindless.add_storage_image(&present_image.view, tgpu::ImageLayout::General);
+        let present_texture_handle =
+            bindless.add_sampled_image(&present_image.view, tgpu::ImageLayout::Fragment);
         let present_sampler_handle = bindless.add_sampler(present_image.sampler.as_ref().unwrap());
 
         const SHADER: &str = include_str!("./shader.slang");
@@ -215,10 +206,11 @@ impl Render {
             push_constant_size: Some(std::mem::size_of::<PushConstants>() as u32),
             blend_states: None,
             vertex_input_state: None,
-            topology: tgpu::PrimitiveTopology::TRIANGLE_LIST,
-            polygon: tgpu::PolygonMode::FILL,
-            cull: tgpu::CullModeFlags::BACK,
-            front_face: tgpu::FrontFace::COUNTER_CLOCKWISE,
+            topology: tgpu::PrimitiveTopology::TriangleList,
+            polygon: tgpu::PolygonMode::Fill,
+            cull: tgpu::CullMode::BACK,
+            front_face: tgpu::FrontFace::CounterClockwise,
+            ..Default::default()
         });
 
         let pc = PushConstants {
@@ -231,6 +223,7 @@ impl Render {
             dt: 0.,
             _pad: 0.0,
         };
+        let frame_values = vec![0; swapchain.max_frames_in_flight()];
 
         let new = Self {
             window,
@@ -247,15 +240,19 @@ impl Render {
             clear_pipeline,
             pc,
             frame_count: 0,
+            frame_values,
         };
 
         Ok(new)
     }
 
     fn render_frame(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        let ring = self.swapchain.flight_index();
+        self.queue.timeline.wait(self.frame_values[ring], None);
+
         let frame = self.swapchain.acquire_next(None)?;
         log::trace!("Start Frame {:?}", frame.index);
-        if frame.suboptimal {
+        if frame.out_of_date {
             self.handle_resize();
             return Ok(());
         }
@@ -266,7 +263,7 @@ impl Render {
             tgpu::ImageTransition {
                 from: tgpu::ImageLayoutTransition::UNDEFINED,
                 to: tgpu::ImageLayoutTransition::COMPUTE,
-                aspect: vk::ImageAspectFlags::COLOR,
+                aspect: tgpu::ImageAspect::COLOR,
                 ..Default::default()
             },
         );
@@ -299,7 +296,7 @@ impl Render {
             tgpu::ImageTransition {
                 from: tgpu::ImageLayoutTransition::COMPUTE,
                 to: tgpu::ImageLayoutTransition::FRAGMENT,
-                aspect: vk::ImageAspectFlags::COLOR,
+                aspect: tgpu::ImageAspect::COLOR,
                 ..Default::default()
             },
         );
@@ -309,7 +306,7 @@ impl Render {
             tgpu::ImageTransition {
                 from: tgpu::ImageLayoutTransition::UNDEFINED,
                 to: tgpu::ImageLayoutTransition::COLOR,
-                aspect: vk::ImageAspectFlags::COLOR,
+                aspect: tgpu::ImageAspect::COLOR,
                 ..Default::default()
             },
         );
@@ -318,16 +315,12 @@ impl Render {
         let color = (frame_number / 120.0).sin().abs();
         let invert_color = 1.0 - color;
 
-        let attachment = vk::RenderingAttachmentInfo::default()
-            .image_view(self.swapchain.view(frame).inner.handle)
-            .image_layout(vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL)
-            .load_op(vk::AttachmentLoadOp::CLEAR)
-            .store_op(vk::AttachmentStoreOp::STORE)
-            .clear_value(vk::ClearValue {
-                color: vk::ClearColorValue {
-                    float32: [0.0, color, invert_color, 1.0],
-                },
-            });
+        let attachment = tgpu::RenderAttachment::color(self.swapchain.view(frame)).clear_color([
+            0.0,
+            color,
+            invert_color,
+            1.0,
+        ]);
 
         recorder.bind_render_pipeline(&self.present_pipeline);
         recorder.bind_render_descriptor_set(
@@ -341,26 +334,12 @@ impl Render {
         recorder.begin_render(
             &tgpu::RenderInfo {
                 colors: &[attachment],
-                area: vk::Rect2D {
-                    extent: self.swapchain.extent(),
-                    ..Default::default()
-                },
+                area: tgpu::Rect::from_extent(self.swapchain.extent()),
                 ..Default::default()
             },
             |recorder| {
-                let viewport = vk::Viewport {
-                    x: 0.0,
-                    y: 0.0,
-                    width: self.swapchain.extent().width as f32,
-                    height: self.swapchain.extent().height as f32,
-                    min_depth: 0.0,
-                    max_depth: 1.0,
-                };
-
-                let scissor = vk::Rect2D {
-                    extent: self.swapchain.extent(),
-                    ..Default::default()
-                };
+                let viewport = tgpu::Viewport::from_extent(self.swapchain.extent());
+                let scissor = tgpu::Rect::from_extent(self.swapchain.extent());
 
                 recorder.viewport(viewport);
                 recorder.scissor(scissor);
@@ -374,24 +353,24 @@ impl Render {
             tgpu::ImageTransition {
                 from: tgpu::ImageLayoutTransition::COLOR,
                 to: tgpu::ImageLayoutTransition::PRESENT,
-                aspect: vk::ImageAspectFlags::COLOR,
+                aspect: tgpu::ImageAspect::COLOR,
                 ..Default::default()
             },
         );
 
-        let available_semaphore = self.swapchain.inner.available_semaphore(frame);
-        let finished_semaphore = self.swapchain.inner.finished_semaphore(frame);
+        let available_semaphore = self.swapchain.available_semaphore(frame);
+        let finished_semaphore = self.swapchain.finished_semaphore(frame);
 
-        self.queue.submit(tgpu::SubmitInfo {
+        let signal_value = self.queue.submit(tgpu::SubmitInfo {
             records: &[recorder.finish()],
             wait_binary: &[(
                 available_semaphore,
-                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
+                tgpu::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
             )],
             signal_binary: &[finished_semaphore],
-            fence: Some(self.swapchain.inner.fence(frame)),
             ..Default::default()
         });
+        self.frame_values[ring] = signal_value;
 
         match self.swapchain.present(&self.queue, frame) {
             Ok(true) | Err(_) => {
@@ -411,11 +390,10 @@ impl Render {
     fn handle_resize(&mut self) {
         log::debug!("recreate swapchain");
         let size = self.window.inner_size();
-        self.swapchain.set_preferred_extent(vk::Extent2D {
-            width: size.width,
-            height: size.height,
-        });
+        self.swapchain
+            .set_preferred_extent(tgpu::Extent2D::new(size.width, size.height));
         let _ = self.swapchain.recreate();
+        self.frame_values = vec![0; self.swapchain.max_frames_in_flight()];
         self.pc.window = [size.width, size.height];
 
         let present_image = self
@@ -424,11 +402,7 @@ impl Render {
                 image: tgpu::ImageDesc {
                     label: Some(tgpu::Label::Name("present image")),
                     format: self.swapchain.format(),
-                    extent: vk::Extent3D {
-                        width: self.swapchain.extent().width,
-                        height: self.swapchain.extent().height,
-                        depth: 1,
-                    },
+                    extent: self.swapchain.extent().to_3d(1),
                     usage: tgpu::ImageUses::COPY_SRC
                         | tgpu::ImageUses::COPY_DST
                         | tgpu::ImageUses::STORAGE
@@ -447,12 +421,12 @@ impl Render {
         self.bindless.update_storage_image(
             self.pc.output_image,
             &present_image.view,
-            vk::ImageLayout::GENERAL,
+            tgpu::ImageLayout::General,
         );
         self.bindless.update_sampled_image(
             self.pc.present_texture,
             &present_image.view,
-            vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
+            tgpu::ImageLayout::Fragment,
         );
         self.bindless.update_sampler(
             self.pc.present_sampler,

@@ -40,6 +40,8 @@ pub struct DeviceImpl {
 #[derive(Debug, Clone, Copy)]
 pub struct DeviceFeatures {
     pub fill_mode_non_solid: bool,
+    pub multi_draw_indirect: bool,
+    pub draw_indirect_first_instance: bool,
     pub descriptor_indexing: bool,
     pub buffer_device_address: bool,
 }
@@ -48,6 +50,8 @@ impl DeviceFeatures {
     pub fn modern_bindless_defaults() -> Self {
         Self {
             fill_mode_non_solid: false,
+            multi_draw_indirect: true,
+            draw_indirect_first_instance: true,
             descriptor_indexing: true,
             buffer_device_address: false,
         }
@@ -84,8 +88,25 @@ impl DeviceImpl {
             ));
         }
 
+        if info.features.multi_draw_indirect && !adapter.features.multi_draw_indirect {
+            return Err(GPUError::Validation(
+                "multi_draw_indirect is not supported by the selected adapter",
+            ));
+        }
+
+        if info.features.draw_indirect_first_instance
+            && !adapter.features.draw_indirect_first_instance
+        {
+            return Err(GPUError::Validation(
+                "draw_indirect_first_instance is not supported by the selected adapter",
+            ));
+        }
+
         if info.features.descriptor_indexing
-            && !adapter.features.descriptor_indexing.supports_global_bindless()
+            && !adapter
+                .features
+                .descriptor_indexing
+                .supports_global_bindless()
         {
             return Err(GPUError::Validation(
                 "descriptor_indexing is not fully supported by the selected adapter",
@@ -115,6 +136,12 @@ impl DeviceImpl {
         if info.features.fill_mode_non_solid {
             requested_features = requested_features.fill_mode_non_solid(true);
         }
+        if info.features.multi_draw_indirect {
+            requested_features = requested_features.multi_draw_indirect(true);
+        }
+        if info.features.draw_indirect_first_instance {
+            requested_features = requested_features.draw_indirect_first_instance(true);
+        }
         if info.features.buffer_device_address {
             requested_features = requested_features.shader_int64(true);
         }
@@ -135,16 +162,26 @@ impl DeviceImpl {
         let mut descriptor_indexing_features =
             vk::PhysicalDeviceDescriptorIndexingFeatures::default()
                 .descriptor_binding_partially_bound(info.features.descriptor_indexing)
-                .descriptor_binding_uniform_buffer_update_after_bind(info.features.descriptor_indexing)
-                .descriptor_binding_sampled_image_update_after_bind(info.features.descriptor_indexing)
-                .descriptor_binding_storage_image_update_after_bind(info.features.descriptor_indexing)
-                .descriptor_binding_storage_buffer_update_after_bind(info.features.descriptor_indexing)
+                .descriptor_binding_uniform_buffer_update_after_bind(
+                    info.features.descriptor_indexing,
+                )
+                .descriptor_binding_sampled_image_update_after_bind(
+                    info.features.descriptor_indexing,
+                )
+                .descriptor_binding_storage_image_update_after_bind(
+                    info.features.descriptor_indexing,
+                )
+                .descriptor_binding_storage_buffer_update_after_bind(
+                    info.features.descriptor_indexing,
+                )
                 .runtime_descriptor_array(info.features.descriptor_indexing)
                 .descriptor_binding_update_unused_while_pending(info.features.descriptor_indexing)
                 .shader_uniform_buffer_array_non_uniform_indexing(info.features.descriptor_indexing)
                 .shader_sampled_image_array_non_uniform_indexing(info.features.descriptor_indexing)
                 .shader_storage_image_array_non_uniform_indexing(info.features.descriptor_indexing)
-                .shader_storage_buffer_array_non_uniform_indexing(info.features.descriptor_indexing);
+                .shader_storage_buffer_array_non_uniform_indexing(
+                    info.features.descriptor_indexing,
+                );
 
         let mut buffer_device_address_features =
             vk::PhysicalDeviceBufferDeviceAddressFeatures::default()
@@ -272,21 +309,6 @@ impl DeviceImpl {
         unsafe {
             self.handle
                 .get_buffer_device_address(&vk::BufferDeviceAddressInfo::default().buffer(buffer))
-        }
-    }
-
-    pub unsafe fn wait_fence(&self, fence: vk::Fence, timeout: Option<u64>) {
-        let timeout = timeout.unwrap_or(u64::MAX);
-        unsafe {
-            self.handle
-                .wait_for_fences(&[fence], true, timeout)
-                .expect("Wait for fence")
-        }
-    }
-
-    pub unsafe fn reset_fence(&self, fence: vk::Fence) {
-        unsafe {
-            self.handle.reset_fences(&[fence]).expect("Reset Fence");
         }
     }
 
