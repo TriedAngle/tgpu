@@ -1,8 +1,4 @@
-use std::{
-    ffi::c_void,
-    num::NonZeroIsize,
-    ptr::NonNull,
-};
+use std::{ffi::c_void, num::NonZeroIsize, ptr::NonNull};
 
 use raw_window_handle::{
     AppKitDisplayHandle, AppKitWindowHandle, RawDisplayHandle, RawWindowHandle, Win32WindowHandle,
@@ -12,7 +8,7 @@ use tgpu::{Swapchain, SwapchainCreateInfo};
 
 use crate::{
     command::TgpuCommandBuffer,
-    error::{check_size, guard_box, guard_status, TgpuStatus, Error},
+    error::{Error, TgpuStatus, check_size, guard_box, guard_status},
     image::TgpuImageView,
     instance::{TgpuDevice, TgpuQueue},
     types::{TgpuExtent2D, TgpuPresentMode, TgpuWindow, TgpuWindowKind},
@@ -108,9 +104,7 @@ fn raw_handles(window: &TgpuWindow) -> Result<(RawDisplayHandle, RawWindowHandle
             )
         }
         TgpuWindowKind::Wayland => {
-            return Err(Error::validation(
-                "Wayland surfaces are not wired up yet",
-            ));
+            return Err(Error::validation("Wayland surfaces are not wired up yet"));
         }
     })
 }
@@ -121,8 +115,8 @@ pub unsafe extern "C" fn tgpu_device_create_swapchain(
     desc: *const TgpuSwapchainDesc,
 ) -> *mut TgpuSwapchain {
     guard_box(|| {
-        let device = unsafe { device.as_ref() }
-            .ok_or_else(|| Error::validation("device is NULL"))?;
+        let device =
+            unsafe { device.as_ref() }.ok_or_else(|| Error::validation("device is NULL"))?;
         let desc = unsafe { desc.as_ref() }
             .ok_or_else(|| Error::validation("TgpuSwapchainDesc is NULL"))?;
         check_size::<TgpuSwapchainDesc>(desc.struct_size, "TgpuSwapchainDesc")?;
@@ -160,10 +154,9 @@ pub unsafe extern "C" fn tgpu_swapchain_extent(
     out: *mut TgpuExtent2D,
 ) -> TgpuStatus {
     guard_status(|| {
-        let swapchain = unsafe { swapchain.as_ref() }
-            .ok_or_else(|| Error::validation("swapchain is NULL"))?;
-        let out = unsafe { out.as_mut() }
-            .ok_or_else(|| Error::validation("out is NULL"))?;
+        let swapchain =
+            unsafe { swapchain.as_ref() }.ok_or_else(|| Error::validation("swapchain is NULL"))?;
+        let out = unsafe { out.as_mut() }.ok_or_else(|| Error::validation("out is NULL"))?;
         *out = swapchain.handle.extent().into();
         Ok(())
     })
@@ -172,8 +165,7 @@ pub unsafe extern "C" fn tgpu_swapchain_extent(
 /// Returns the surface format as a `VkFormat` value.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn tgpu_swapchain_format(swapchain: *const TgpuSwapchain) -> i32 {
-    unsafe { swapchain.as_ref() }
-        .map_or(0, |swapchain| swapchain.handle.format().as_raw())
+    unsafe { swapchain.as_ref() }.map_or(0, |swapchain| swapchain.handle.format().as_raw())
 }
 
 #[unsafe(no_mangle)]
@@ -192,12 +184,10 @@ pub unsafe extern "C" fn tgpu_swapchain_begin_frame(
     out: *mut TgpuFrame,
 ) -> TgpuStatus {
     guard_status(|| {
-        let queue = unsafe { queue.as_ref() }
-            .ok_or_else(|| Error::validation("queue is NULL"))?;
-        let swapchain = unsafe { swapchain.as_mut() }
-            .ok_or_else(|| Error::validation("swapchain is NULL"))?;
-        let out = unsafe { out.as_mut() }
-            .ok_or_else(|| Error::validation("out is NULL"))?;
+        let queue = unsafe { queue.as_ref() }.ok_or_else(|| Error::validation("queue is NULL"))?;
+        let swapchain =
+            unsafe { swapchain.as_mut() }.ok_or_else(|| Error::validation("swapchain is NULL"))?;
+        let out = unsafe { out.as_mut() }.ok_or_else(|| Error::validation("out is NULL"))?;
 
         *out = swapchain.handle_mut().begin_frame(queue.handle())?.into();
         Ok(())
@@ -214,10 +204,9 @@ pub unsafe extern "C" fn tgpu_swapchain_end_frame(
     record_count: usize,
 ) -> TgpuStatus {
     guard_status(|| {
-        let queue = unsafe { queue.as_ref() }
-            .ok_or_else(|| Error::validation("queue is NULL"))?;
-        let swapchain = unsafe { swapchain.as_mut() }
-            .ok_or_else(|| Error::validation("swapchain is NULL"))?;
+        let queue = unsafe { queue.as_ref() }.ok_or_else(|| Error::validation("queue is NULL"))?;
+        let swapchain =
+            unsafe { swapchain.as_mut() }.ok_or_else(|| Error::validation("swapchain is NULL"))?;
         if record_count > 0 && records.is_null() {
             return Err(Error::validation("records is NULL"));
         }
@@ -276,12 +265,10 @@ pub unsafe extern "C" fn tgpu_swapchain_set_extent(
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn tgpu_swapchain_recreate(
-    swapchain: *mut TgpuSwapchain,
-) -> TgpuStatus {
+pub unsafe extern "C" fn tgpu_swapchain_recreate(swapchain: *mut TgpuSwapchain) -> TgpuStatus {
     guard_status(|| {
-        let swapchain = unsafe { swapchain.as_mut() }
-            .ok_or_else(|| Error::validation("swapchain is NULL"))?;
+        let swapchain =
+            unsafe { swapchain.as_mut() }.ok_or_else(|| Error::validation("swapchain is NULL"))?;
         swapchain.handle_mut().recreate()?;
         Ok(())
     })

@@ -1045,11 +1045,7 @@ impl CommandRecorderImpl {
         }
     }
 
-    pub unsafe fn push_render_constants_bytes(
-        &mut self,
-        pipeline: &RenderPipelineImpl,
-        pc: &[u8],
-    ) {
+    pub unsafe fn push_render_constants_bytes(&mut self, pipeline: &RenderPipelineImpl, pc: &[u8]) {
         unsafe {
             self.device.handle.cmd_push_constants(
                 self.buffer.handle,

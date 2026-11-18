@@ -474,7 +474,8 @@ impl Renderer {
 
         self.process_texture_deltas(flight_index, &textures_delta)?;
         self.build_frame_resources(flight_index, &paint_jobs)?;
-        self.pending_texture_frees.extend(textures_delta.free.iter().copied());
+        self.pending_texture_frees
+            .extend(textures_delta.free.iter().copied());
         textures_delta.clear();
 
         Ok(Frame {

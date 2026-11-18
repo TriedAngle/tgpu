@@ -2,7 +2,7 @@ use tgpu::{BindlessHeap, BindlessInfo, GPUError};
 
 use crate::{
     buffer::TgpuBuffer,
-    error::{check_size, guard_box, guard_status, set_last_error, Error, TgpuStatus},
+    error::{Error, TgpuStatus, check_size, guard_box, guard_status, set_last_error},
     image::{TgpuImageView, TgpuSampler},
     instance::TgpuDevice,
     types::TgpuImageLayout,

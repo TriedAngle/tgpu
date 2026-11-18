@@ -58,8 +58,7 @@ pub use buffer::{
 };
 pub use command::{
     AttachmentLoadOp, AttachmentStoreOp, ClearValue, CommandBuffer, CommandPools, CommandRecorder,
-    IndexType, RenderAttachment, RenderInfo, RenderRecorder, SubmitInfo,
-    ThreadCommandPool,
+    IndexType, RenderAttachment, RenderInfo, RenderRecorder, SubmitInfo, ThreadCommandPool,
 };
 pub use debug::Label;
 pub use descriptor::{

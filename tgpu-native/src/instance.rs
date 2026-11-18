@@ -6,15 +6,15 @@ use tgpu::{
 };
 
 use crate::{
-    error::{check_size, cstr, guard_box, guard_status, Error, TgpuStatus},
+    error::{Error, TgpuStatus, check_size, cstr, guard_box, guard_status},
     types::{
         TGPU_ADAPTER_DEVICE_TYPE_CPU, TGPU_ADAPTER_DEVICE_TYPE_DISCRETE_GPU,
         TGPU_ADAPTER_DEVICE_TYPE_INTEGRATED_GPU, TGPU_ADAPTER_DEVICE_TYPE_OTHER,
         TGPU_ADAPTER_DEVICE_TYPE_VIRTUAL_GPU, TGPU_DEVICE_FEATURE_BUFFER_DEVICE_ADDRESS,
-        TGPU_DEVICE_FEATURE_DESCRIPTOR_INDEXING,
-        TGPU_DEVICE_FEATURE_DRAW_INDIRECT_FIRST_INSTANCE, TGPU_DEVICE_FEATURE_FILL_MODE_NON_SOLID,
-        TGPU_DEVICE_FEATURE_MULTI_DRAW_INDIRECT, TGPU_QUEUE_COMPUTE, TGPU_QUEUE_GRAPHICS,
-        TGPU_QUEUE_PROTECTED, TGPU_QUEUE_SPARSE_BINDING, TGPU_QUEUE_TRANSFER,
+        TGPU_DEVICE_FEATURE_DESCRIPTOR_INDEXING, TGPU_DEVICE_FEATURE_DRAW_INDIRECT_FIRST_INSTANCE,
+        TGPU_DEVICE_FEATURE_FILL_MODE_NON_SOLID, TGPU_DEVICE_FEATURE_MULTI_DRAW_INDIRECT,
+        TGPU_QUEUE_COMPUTE, TGPU_QUEUE_GRAPHICS, TGPU_QUEUE_PROTECTED, TGPU_QUEUE_SPARSE_BINDING,
+        TGPU_QUEUE_TRANSFER,
     },
 };
 
@@ -141,8 +141,7 @@ fn device_features(bits: u32) -> DeviceFeatures {
     DeviceFeatures {
         fill_mode_non_solid: bits & TGPU_DEVICE_FEATURE_FILL_MODE_NON_SOLID != 0,
         multi_draw_indirect: bits & TGPU_DEVICE_FEATURE_MULTI_DRAW_INDIRECT != 0,
-        draw_indirect_first_instance: bits & TGPU_DEVICE_FEATURE_DRAW_INDIRECT_FIRST_INSTANCE
-            != 0,
+        draw_indirect_first_instance: bits & TGPU_DEVICE_FEATURE_DRAW_INDIRECT_FIRST_INSTANCE != 0,
         descriptor_indexing: bits & TGPU_DEVICE_FEATURE_DESCRIPTOR_INDEXING != 0,
         buffer_device_address: bits & TGPU_DEVICE_FEATURE_BUFFER_DEVICE_ADDRESS != 0,
     }
@@ -196,8 +195,8 @@ pub unsafe extern "C" fn tgpu_device_create(
     out_capacity: usize,
 ) -> *mut TgpuDevice {
     guard_box(|| {
-        let instance = unsafe { instance.as_ref() }
-            .ok_or_else(|| Error::validation("instance is NULL"))?;
+        let instance =
+            unsafe { instance.as_ref() }.ok_or_else(|| Error::validation("instance is NULL"))?;
 
         let (features, requests) = if let Some(desc) = unsafe { desc.as_ref() } {
             check_size::<TgpuDeviceDesc>(desc.struct_size, "TgpuDeviceDesc")?;
@@ -205,8 +204,7 @@ pub unsafe extern "C" fn tgpu_device_create(
             let requests = if desc.queue_count == 0 || desc.queues.is_null() {
                 vec![QueueRequest::graphics_compute()]
             } else {
-                let queues =
-                    unsafe { std::slice::from_raw_parts(desc.queues, desc.queue_count) };
+                let queues = unsafe { std::slice::from_raw_parts(desc.queues, desc.queue_count) };
                 queues
                     .iter()
                     .map(|queue| {
@@ -276,10 +274,9 @@ pub unsafe extern "C" fn tgpu_device_adapter_info(
     out: *mut TgpuAdapterInfo,
 ) -> TgpuStatus {
     guard_status(|| {
-        let device = unsafe { device.as_ref() }
-            .ok_or_else(|| Error::validation("device is NULL"))?;
-        let out = unsafe { out.as_mut() }
-            .ok_or_else(|| Error::validation("out is NULL"))?;
+        let device =
+            unsafe { device.as_ref() }.ok_or_else(|| Error::validation("device is NULL"))?;
+        let out = unsafe { out.as_mut() }.ok_or_else(|| Error::validation("out is NULL"))?;
         *out = TgpuAdapterInfo::from_tgpu(device.handle.adapter.info());
         Ok(())
     })

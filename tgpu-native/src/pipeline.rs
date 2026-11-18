@@ -2,16 +2,17 @@ use std::ffi::c_char;
 
 use tgpu::{
     ColorBlend, ComputePipeline, ComputePipelineInfo, DescriptorSetLayout, Format, RenderPipeline,
-    RenderPipelineInfo, Shader, ShaderEntry, VertexAttribute, VertexBufferLayout, VertexInput,
+    RenderPipelineInfo, Shader, ShaderEntry, ShaderSource, VertexAttribute, VertexBufferLayout,
+    VertexInput,
 };
 
 use crate::{
     bindless::TgpuBindlessHeap,
-    error::{check_size, guard_box, label, required_cstr, Error},
+    error::{Error, check_size, guard_box, label, required_cstr},
     instance::TgpuDevice,
     types::{
-        TgpuBlend, TgpuCompareOp, TgpuCullMode, TgpuFormat, TgpuFrontFace,
-        TgpuPrimitiveTopology, TgpuVertexInputRate,
+        TgpuBlend, TgpuCompareOp, TgpuCullMode, TgpuFormat, TgpuFrontFace, TgpuPrimitiveTopology,
+        TgpuVertexInputRate,
     },
 };
 
@@ -107,8 +108,8 @@ pub unsafe extern "C" fn tgpu_device_create_shader(
     word_count: usize,
 ) -> *mut TgpuShader {
     guard_box(|| {
-        let device = unsafe { device.as_ref() }
-            .ok_or_else(|| Error::validation("device is NULL"))?;
+        let device =
+            unsafe { device.as_ref() }.ok_or_else(|| Error::validation("device is NULL"))?;
         if word_count > 0 && words.is_null() {
             return Err(Error::validation("SPIR-V words are NULL"));
         }
@@ -117,6 +118,28 @@ pub unsafe extern "C" fn tgpu_device_create_shader(
         let inner = device
             .handle()
             .create_shader_from_spirv(unsafe { label(label_ptr) }, words);
+        Ok(Box::new(TgpuShader { handle: inner }))
+    })
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn tgpu_device_create_shader_slang(
+    device: *mut TgpuDevice,
+    label_ptr: *const c_char,
+    source: *const u8,
+    source_len: usize,
+) -> *mut TgpuShader {
+    guard_box(|| {
+        let device =
+            unsafe { device.as_ref() }.ok_or_else(|| Error::validation("device is NULL"))?;
+        if source_len > 0 && source.is_null() {
+            return Err(Error::validation("Slang source is NULL"));
+        }
+
+        let source = unsafe { std::slice::from_raw_parts(source, source_len) };
+        let inner = device
+            .handle()
+            .create_shader(unsafe { label(label_ptr) }, ShaderSource::Slang(source))?;
         Ok(Box::new(TgpuShader { handle: inner }))
     })
 }
@@ -152,8 +175,8 @@ pub unsafe extern "C" fn tgpu_device_create_compute_pipeline(
     desc: *const TgpuComputePipelineDesc,
 ) -> *mut TgpuComputePipeline {
     guard_box(|| {
-        let device = unsafe { device.as_ref() }
-            .ok_or_else(|| Error::validation("device is NULL"))?;
+        let device =
+            unsafe { device.as_ref() }.ok_or_else(|| Error::validation("device is NULL"))?;
         let desc = unsafe { desc.as_ref() }
             .ok_or_else(|| Error::validation("TgpuComputePipelineDesc is NULL"))?;
         check_size::<TgpuComputePipelineDesc>(desc.struct_size, "TgpuComputePipelineDesc")?;
@@ -161,13 +184,16 @@ pub unsafe extern "C" fn tgpu_device_create_compute_pipeline(
         let shader = unsafe { shader_entry(desc.shader, desc.entry, "entry")? };
         let layouts = layouts(desc.bindless);
 
-        let inner = device.handle().try_create_compute_pipeline(&ComputePipelineInfo {
-            label: unsafe { label(desc.label) },
-            shader,
-            descriptor_layouts: &layouts,
-            push_constant_size: (desc.push_constant_size > 0).then_some(desc.push_constant_size),
-            cache: None,
-        })?;
+        let inner = device
+            .handle()
+            .try_create_compute_pipeline(&ComputePipelineInfo {
+                label: unsafe { label(desc.label) },
+                shader,
+                descriptor_layouts: &layouts,
+                push_constant_size: (desc.push_constant_size > 0)
+                    .then_some(desc.push_constant_size),
+                cache: None,
+            })?;
 
         Ok(Box::new(TgpuComputePipeline { handle: inner }))
     })
@@ -186,8 +212,8 @@ pub unsafe extern "C" fn tgpu_device_create_render_pipeline(
     desc: *const TgpuRenderPipelineDesc,
 ) -> *mut TgpuRenderPipeline {
     guard_box(|| {
-        let device = unsafe { device.as_ref() }
-            .ok_or_else(|| Error::validation("device is NULL"))?;
+        let device =
+            unsafe { device.as_ref() }.ok_or_else(|| Error::validation("device is NULL"))?;
         let desc = unsafe { desc.as_ref() }
             .ok_or_else(|| Error::validation("TgpuRenderPipelineDesc is NULL"))?;
         check_size::<TgpuRenderPipelineDesc>(desc.struct_size, "TgpuRenderPipelineDesc")?;
@@ -200,12 +226,11 @@ pub unsafe extern "C" fn tgpu_device_create_render_pipeline(
         if desc.color_format_count > 0 && desc.color_formats.is_null() {
             return Err(Error::validation("color_formats is NULL"));
         }
-        let color_formats = unsafe {
-            std::slice::from_raw_parts(desc.color_formats, desc.color_format_count)
-        }
-        .iter()
-        .map(|format| Format::from_raw(*format))
-        .collect::<Vec<_>>();
+        let color_formats =
+            unsafe { std::slice::from_raw_parts(desc.color_formats, desc.color_format_count) }
+                .iter()
+                .map(|format| Format::from_raw(*format))
+                .collect::<Vec<_>>();
 
         let layouts = layouts(desc.bindless);
 
@@ -251,27 +276,30 @@ pub unsafe extern "C" fn tgpu_device_create_render_pipeline(
             attributes: &attributes,
         });
 
-        let inner = device.handle().try_create_render_pipeline(&RenderPipelineInfo {
-            label: unsafe { label(desc.label) },
-            vertex_shader,
-            fragment_shader,
-            color_formats: &color_formats,
-            depth_format: (desc.depth_format != 0).then(|| Format::from_raw(desc.depth_format)),
-            depth_test: desc.depth_test,
-            depth_write: desc.depth_write,
-            depth_compare: desc.depth_compare.into(),
-            descriptor_layouts: &layouts,
-            push_constant_size: (desc.push_constant_size > 0).then_some(desc.push_constant_size),
-            blend: (!blend_values.is_empty()).then_some(blend_values.as_slice()),
-            blend_states: None,
-            vertex_input,
-            vertex_input_state: None,
-            topology: desc.topology.into(),
-            polygon: Default::default(),
-            cull: desc.cull.into(),
-            front_face: desc.front_face.into(),
-            ..Default::default()
-        })?;
+        let inner = device
+            .handle()
+            .try_create_render_pipeline(&RenderPipelineInfo {
+                label: unsafe { label(desc.label) },
+                vertex_shader,
+                fragment_shader,
+                color_formats: &color_formats,
+                depth_format: (desc.depth_format != 0).then(|| Format::from_raw(desc.depth_format)),
+                depth_test: desc.depth_test,
+                depth_write: desc.depth_write,
+                depth_compare: desc.depth_compare.into(),
+                descriptor_layouts: &layouts,
+                push_constant_size: (desc.push_constant_size > 0)
+                    .then_some(desc.push_constant_size),
+                blend: (!blend_values.is_empty()).then_some(blend_values.as_slice()),
+                blend_states: None,
+                vertex_input,
+                vertex_input_state: None,
+                topology: desc.topology.into(),
+                polygon: Default::default(),
+                cull: desc.cull.into(),
+                front_face: desc.front_face.into(),
+                ..Default::default()
+            })?;
 
         Ok(Box::new(TgpuRenderPipeline { handle: inner }))
     })

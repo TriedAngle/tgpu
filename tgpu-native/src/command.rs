@@ -8,7 +8,7 @@ use tgpu::{
 use crate::{
     bindless::TgpuBindlessHeap,
     buffer::TgpuBuffer,
-    error::{check_size, guard_box, guard_status, Error, TgpuStatus},
+    error::{Error, TgpuStatus, check_size, guard_box, guard_status},
     image::{TgpuImage, TgpuImageView},
     instance::TgpuQueue,
     pipeline::{TgpuComputePipeline, TgpuRenderPipeline},
@@ -22,7 +22,9 @@ pub struct TgpuCommandRecorder {
 
 impl TgpuCommandRecorder {
     pub fn handle_mut(&mut self) -> &mut CommandRecorder {
-        self.handle.as_mut().expect("command recorder checked by caller")
+        self.handle
+            .as_mut()
+            .expect("command recorder checked by caller")
     }
 }
 
@@ -76,7 +78,9 @@ pub struct TgpuRenderDesc {
     pub stencil: *const TgpuDepthAttachment,
 }
 
-fn recorder_ref<'a>(recorder: *mut TgpuCommandRecorder) -> Result<&'a mut TgpuCommandRecorder, Error> {
+fn recorder_ref<'a>(
+    recorder: *mut TgpuCommandRecorder,
+) -> Result<&'a mut TgpuCommandRecorder, Error> {
     let recorder = unsafe { recorder.as_mut() }
         .ok_or_else(|| Error::validation("command recorder is NULL"))?;
     if recorder.handle.is_none() {
@@ -124,8 +128,7 @@ pub unsafe extern "C" fn tgpu_queue_begin_commands(
     queue: *const TgpuQueue,
 ) -> *mut TgpuCommandRecorder {
     guard_box(|| {
-        let queue = unsafe { queue.as_ref() }
-            .ok_or_else(|| Error::validation("queue is NULL"))?;
+        let queue = unsafe { queue.as_ref() }.ok_or_else(|| Error::validation("queue is NULL"))?;
         Ok(Box::new(TgpuCommandRecorder {
             handle: Some(queue.handle().record()),
         }))
@@ -168,9 +171,10 @@ pub unsafe extern "C" fn tgpu_recorder_transition_image(
     layout: TgpuImageLayout,
 ) -> TgpuStatus {
     guard_status(|| {
-        recorder_ref(recorder)?
-            .handle_mut()
-            .image_transition(image_ref(&image)?, ImageLayoutTransition::new(layout.into()));
+        recorder_ref(recorder)?.handle_mut().image_transition(
+            image_ref(&image)?,
+            ImageLayoutTransition::new(layout.into()),
+        );
         Ok(())
     })
 }
@@ -184,8 +188,8 @@ pub unsafe extern "C" fn tgpu_recorder_transition_frame(
 ) -> TgpuStatus {
     guard_status(|| {
         let recorder = recorder_ref(recorder)?;
-        let swapchain = unsafe { swapchain.as_ref() }
-            .ok_or_else(|| Error::validation("swapchain is NULL"))?;
+        let swapchain =
+            unsafe { swapchain.as_ref() }.ok_or_else(|| Error::validation("swapchain is NULL"))?;
         swapchain.handle().transition_frame(
             recorder.handle_mut(),
             frame.into(),
@@ -204,8 +208,8 @@ pub unsafe extern "C" fn tgpu_recorder_buffer_transition(
 ) -> TgpuStatus {
     guard_status(|| {
         let recorder = recorder_ref(recorder)?;
-        let buffer = unsafe { buffer.as_ref() }
-            .ok_or_else(|| Error::validation("buffer is NULL"))?;
+        let buffer =
+            unsafe { buffer.as_ref() }.ok_or_else(|| Error::validation("buffer is NULL"))?;
         recorder.handle_mut().buffer_transition(
             buffer.handle(),
             BufferTransition {
@@ -228,8 +232,8 @@ pub unsafe extern "C" fn tgpu_recorder_update_buffer(
 ) -> TgpuStatus {
     guard_status(|| {
         let recorder = recorder_ref(recorder)?;
-        let buffer = unsafe { buffer.as_ref() }
-            .ok_or_else(|| Error::validation("buffer is NULL"))?;
+        let buffer =
+            unsafe { buffer.as_ref() }.ok_or_else(|| Error::validation("buffer is NULL"))?;
         if len > 0 && data.is_null() {
             return Err(Error::validation("data is NULL"));
         }
@@ -251,8 +255,8 @@ pub unsafe extern "C" fn tgpu_recorder_bind_vertex_buffer(
 ) -> TgpuStatus {
     guard_status(|| {
         let recorder = recorder_ref(recorder)?;
-        let buffer = unsafe { buffer.as_ref() }
-            .ok_or_else(|| Error::validation("buffer is NULL"))?;
+        let buffer =
+            unsafe { buffer.as_ref() }.ok_or_else(|| Error::validation("buffer is NULL"))?;
         recorder
             .handle_mut()
             .bind_vertex_buffer(slot, buffer.handle(), offset);
@@ -272,8 +276,8 @@ pub unsafe extern "C" fn tgpu_recorder_bind_compute(
         let recorder = recorder_ref(recorder)?;
         let pipeline = unsafe { pipeline.as_ref() }
             .ok_or_else(|| Error::validation("compute pipeline is NULL"))?;
-        let heap = unsafe { heap.as_ref() }
-            .ok_or_else(|| Error::validation("bindless heap is NULL"))?;
+        let heap =
+            unsafe { heap.as_ref() }.ok_or_else(|| Error::validation("bindless heap is NULL"))?;
         if push_constant_len > 0 && push_constants.is_null() {
             return Err(Error::validation("push_constants is NULL"));
         }
@@ -312,8 +316,8 @@ pub unsafe extern "C" fn tgpu_recorder_bind_render(
         let recorder = recorder_ref(recorder)?;
         let pipeline = unsafe { pipeline.as_ref() }
             .ok_or_else(|| Error::validation("render pipeline is NULL"))?;
-        let heap = unsafe { heap.as_ref() }
-            .ok_or_else(|| Error::validation("bindless heap is NULL"))?;
+        let heap =
+            unsafe { heap.as_ref() }.ok_or_else(|| Error::validation("bindless heap is NULL"))?;
         if push_constant_len > 0 && push_constants.is_null() {
             return Err(Error::validation("push_constants is NULL"));
         }
@@ -334,8 +338,8 @@ pub unsafe extern "C" fn tgpu_recorder_begin_render(
 ) -> TgpuStatus {
     guard_status(|| {
         let recorder = recorder_ref(recorder)?;
-        let desc = unsafe { desc.as_ref() }
-            .ok_or_else(|| Error::validation("TgpuRenderDesc is NULL"))?;
+        let desc =
+            unsafe { desc.as_ref() }.ok_or_else(|| Error::validation("TgpuRenderDesc is NULL"))?;
         check_size::<TgpuRenderDesc>(desc.struct_size, "TgpuRenderDesc")?;
         if desc.color_count > 0 && desc.colors.is_null() {
             return Err(Error::validation("colors is NULL"));

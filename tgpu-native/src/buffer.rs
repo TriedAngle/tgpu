@@ -3,7 +3,7 @@ use std::{ffi::c_char, slice};
 use tgpu::{Buffer, BufferDesc};
 
 use crate::{
-    error::{check_size, guard_box, guard_status, label, TgpuStatus, Error},
+    error::{Error, TgpuStatus, check_size, guard_box, guard_status, label},
     instance::TgpuDevice,
     types::{TgpuHostAccess, TgpuMemoryPreset, buffer_uses},
 };
@@ -48,10 +48,10 @@ unsafe fn create(
     data_len: usize,
 ) -> *mut TgpuBuffer {
     guard_box(|| {
-        let device = unsafe { device.as_ref() }
-            .ok_or_else(|| Error::validation("device is NULL"))?;
-        let desc = unsafe { desc.as_ref() }
-            .ok_or_else(|| Error::validation("TgpuBufferDesc is NULL"))?;
+        let device =
+            unsafe { device.as_ref() }.ok_or_else(|| Error::validation("device is NULL"))?;
+        let desc =
+            unsafe { desc.as_ref() }.ok_or_else(|| Error::validation("TgpuBufferDesc is NULL"))?;
         check_size::<TgpuBufferDesc>(desc.struct_size, "TgpuBufferDesc")?;
 
         let buffer = device.handle().create_buffer(&BufferDesc {
@@ -92,8 +92,8 @@ pub unsafe extern "C" fn tgpu_buffer_write(
     len: usize,
 ) -> TgpuStatus {
     guard_status(|| {
-        let buffer = unsafe { buffer.as_ref() }
-            .ok_or_else(|| Error::validation("buffer is NULL"))?;
+        let buffer =
+            unsafe { buffer.as_ref() }.ok_or_else(|| Error::validation("buffer is NULL"))?;
         if len > 0 && data.is_null() {
             return Err(Error::validation("data is NULL"));
         }
@@ -112,8 +112,8 @@ pub unsafe extern "C" fn tgpu_buffer_read(
     len: usize,
 ) -> TgpuStatus {
     guard_status(|| {
-        let buffer = unsafe { buffer.as_ref() }
-            .ok_or_else(|| Error::validation("buffer is NULL"))?;
+        let buffer =
+            unsafe { buffer.as_ref() }.ok_or_else(|| Error::validation("buffer is NULL"))?;
         if len > 0 && data.is_null() {
             return Err(Error::validation("data is NULL"));
         }

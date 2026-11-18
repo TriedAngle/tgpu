@@ -160,10 +160,7 @@ pub unsafe fn cstr<'a>(value: *const c_char) -> Option<&'a str> {
     unsafe { CStr::from_ptr(value) }.to_str().ok()
 }
 
-pub unsafe fn required_cstr<'a>(
-    value: *const c_char,
-    name: &str,
-) -> Result<&'a str, Error> {
+pub unsafe fn required_cstr<'a>(value: *const c_char, name: &str) -> Result<&'a str, Error> {
     unsafe { cstr(value) }.ok_or_else(|| Error::validation(format!("{name} must be valid UTF-8")))
 }
 

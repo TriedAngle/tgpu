@@ -777,6 +777,14 @@ TgpuShader *tgpu_device_create_shader(TgpuDevice *device,
                                       const uint32_t *words,
                                       size_t word_count);
 
+/**
+ * Compiles Slang source with `slangc` and creates a shader module.
+ */
+TgpuShader *tgpu_device_create_shader_slang(TgpuDevice *device,
+                                            const char *label_ptr,
+                                            const uint8_t *source,
+                                            size_t source_len);
+
 void tgpu_shader_destroy(TgpuShader *shader);
 
 TgpuComputePipeline *tgpu_device_create_compute_pipeline(TgpuDevice *device,

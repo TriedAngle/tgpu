@@ -1,13 +1,16 @@
-use std::{ffi::{c_char, c_void}, slice};
+use std::{
+    ffi::{c_char, c_void},
+    slice,
+};
 
 use tgpu::{
     BufferDesc, BufferImageCopy, BufferUses, CopyBufferToImageInfo, Extent2D, Format, HostAccess,
-    Image, ImageAspect, ImageDesc, ImageLayout, ImageLayoutTransition, ImageView,
-    MemoryPreset, Sampler, SamplerCreateInfo, SubmitInfo, ViewImage, ViewImageDesc,
+    Image, ImageAspect, ImageDesc, ImageLayout, ImageLayoutTransition, ImageView, MemoryPreset,
+    Sampler, SamplerCreateInfo, SubmitInfo, ViewImage, ViewImageDesc,
 };
 
 use crate::{
-    error::{check_size, guard_box, label, Error},
+    error::{Error, check_size, guard_box, label},
     instance::{TgpuDevice, TgpuQueue},
     types::{
         TgpuExtent3D, TgpuFilter, TgpuHostAccess, TgpuImageLayout, TgpuMemoryPreset,
@@ -221,8 +224,8 @@ pub unsafe extern "C" fn tgpu_device_create_view_image(
     desc: *const TgpuViewImageDesc,
 ) -> *mut TgpuViewImage {
     guard_box(|| {
-        let device = unsafe { device.as_ref() }
-            .ok_or_else(|| Error::validation("device is NULL"))?;
+        let device =
+            unsafe { device.as_ref() }.ok_or_else(|| Error::validation("device is NULL"))?;
         let desc = unsafe { desc.as_ref() }
             .ok_or_else(|| Error::validation("TgpuViewImageDesc is NULL"))?;
         Ok(Box::new(TgpuViewImage {
@@ -244,10 +247,9 @@ pub unsafe extern "C" fn tgpu_queue_create_texture_2d(
     data_len: usize,
 ) -> *mut TgpuViewImage {
     guard_box(|| {
-        let queue = unsafe { queue.as_ref() }
-            .ok_or_else(|| Error::validation("queue is NULL"))?;
-        let device = unsafe { device.as_ref() }
-            .ok_or_else(|| Error::validation("device is NULL"))?;
+        let queue = unsafe { queue.as_ref() }.ok_or_else(|| Error::validation("queue is NULL"))?;
+        let device =
+            unsafe { device.as_ref() }.ok_or_else(|| Error::validation("device is NULL"))?;
         let desc = unsafe { desc.as_ref() }
             .ok_or_else(|| Error::validation("TgpuViewImageDesc is NULL"))?;
 
@@ -268,7 +270,10 @@ pub unsafe extern "C" fn tgpu_queue_create_texture_2d(
 
         let extent = Extent2D::new(desc.image.width, desc.image.height);
         let mut recorder = queue.handle().record();
-        recorder.image_transition(&image.image, ImageLayoutTransition::new(ImageLayout::TransferDst));
+        recorder.image_transition(
+            &image.image,
+            ImageLayoutTransition::new(ImageLayout::TransferDst),
+        );
         recorder.copy_buffer_to_image(&CopyBufferToImageInfo {
             src: &upload,
             dst: &image.image,
