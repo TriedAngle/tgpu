@@ -3,8 +3,10 @@ use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, Raw
 use std::sync::{Arc, atomic::AtomicI32};
 
 use crate::{
-    CommandBuffer, Device, Extent2D, Format, GPUError, Image, ImageLayout, ImageView,
-    PipelineStageFlags, Queue, Semaphore, SubmitInfo, SurfaceFormat,
+    CommandBuffer, CommandRecorder, Device, Extent2D, Format, GPUError, Image, ImageLayout,
+    ImageLayoutTransition, ImageView, PipelineStageFlags, Queue, Semaphore, SubmitInfo,
+    SurfaceFormat,
+    macros::vk_value_enum,
     raw::{DeviceImpl, ImageImpl, ImageViewImpl, QueueImpl, RawAdapter, RawDevice, SemaphoreImpl},
 };
 
@@ -12,37 +14,14 @@ use crate::{
 /// the GPU busy while the next frame is recorded, without adding input latency.
 const PREFERRED_FRAMES_IN_FLIGHT: usize = 2;
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
-pub enum PresentMode {
-    Immediate,
-    Mailbox,
-    #[default]
-    Fifo,
-    FifoRelaxed,
-    Custom(vk::PresentModeKHR),
-}
-
-impl From<PresentMode> for vk::PresentModeKHR {
-    fn from(value: PresentMode) -> Self {
-        match value {
-            PresentMode::Immediate => vk::PresentModeKHR::IMMEDIATE,
-            PresentMode::Mailbox => vk::PresentModeKHR::MAILBOX,
-            PresentMode::Fifo => vk::PresentModeKHR::FIFO,
-            PresentMode::FifoRelaxed => vk::PresentModeKHR::FIFO_RELAXED,
-            PresentMode::Custom(raw) => raw,
-        }
-    }
-}
-
-impl From<vk::PresentModeKHR> for PresentMode {
-    fn from(value: vk::PresentModeKHR) -> Self {
-        match value {
-            vk::PresentModeKHR::IMMEDIATE => Self::Immediate,
-            vk::PresentModeKHR::MAILBOX => Self::Mailbox,
-            vk::PresentModeKHR::FIFO => Self::Fifo,
-            vk::PresentModeKHR::FIFO_RELAXED => Self::FifoRelaxed,
-            raw => Self::Custom(raw),
-        }
+vk_value_enum! {
+    /// How a presented image is scheduled against the display.
+    PresentMode: vk::PresentModeKHR,
+    default = Fifo => FIFO,
+    {
+        Immediate => IMMEDIATE,
+        Mailbox => MAILBOX,
+        FifoRelaxed => FIFO_RELAXED,
     }
 }
 
@@ -101,17 +80,17 @@ impl FormatSelector {
 
         match self {
             Self::SrgbFirst => find(&[
-                Format::B8G8R8A8_SRGB,
-                Format::R8G8B8A8_SRGB,
-                Format::B8G8R8A8_UNORM,
-                Format::R8G8B8A8_UNORM,
+                Format::Bgra8UnormSrgb,
+                Format::Rgba8UnormSrgb,
+                Format::Bgra8Unorm,
+                Format::Rgba8Unorm,
             ])
             .unwrap_or(formats[0]),
             Self::LinearFirst => find(&[
-                Format::B8G8R8A8_UNORM,
-                Format::R8G8B8A8_UNORM,
-                Format::B8G8R8A8_SRGB,
-                Format::R8G8B8A8_SRGB,
+                Format::Bgra8Unorm,
+                Format::Rgba8Unorm,
+                Format::Bgra8UnormSrgb,
+                Format::Rgba8UnormSrgb,
             ])
             .unwrap_or(formats[0]),
             Self::Preferred(preferred) => *formats
@@ -227,6 +206,7 @@ impl SwapchainImpl {
             info.preferred_extent,
             info.preferred_image_count as u32,
             info.preferred_present_mode,
+            &present_modes,
             format,
         )?;
         // Presentation parallelism vs CPU parallelism are separate knobs: the
@@ -296,6 +276,7 @@ impl SwapchainImpl {
         preferred_extent: Extent2D,
         preferred_image_count: u32,
         preferred_present_mode: PresentMode,
+        present_modes: &[PresentMode],
         format: SurfaceFormat,
     ) -> Result<SwapchainImplResources, GPUError> {
         let capabilities = unsafe {
@@ -327,15 +308,6 @@ impl SwapchainImpl {
         } else {
             capabilities.current_extent
         };
-
-        let present_modes = unsafe {
-            surface_loader
-                .get_physical_device_surface_present_modes(adapter_handle, surface_handle)?
-        };
-        let present_modes = present_modes
-            .into_iter()
-            .map(PresentMode::from)
-            .collect::<Vec<_>>();
 
         let present_mode = if present_modes.contains(&preferred_present_mode) {
             preferred_present_mode
@@ -600,6 +572,7 @@ impl SwapchainImpl {
             self.preferred_extent,
             self.preferred_image_count,
             self.preferred_present_mode,
+            self.present_modes.as_ref(),
             self.format,
         )?;
 
@@ -638,6 +611,21 @@ impl Swapchain {
     #[inline]
     pub fn image(&self, frame: Frame) -> &Image {
         self.inner.image(frame)
+    }
+
+    /// Transitions the acquired image to `to` on `recorder`.
+    ///
+    /// This is `recorder.image_transition(swapchain.image(frame), ..)`, which
+    /// every frame needs twice: into [`ImageLayoutTransition::COLOR`] before
+    /// rendering and into [`ImageLayoutTransition::PRESENT`] before
+    /// [`Swapchain::end_frame`].
+    pub fn transition_frame(
+        &self,
+        recorder: &mut CommandRecorder,
+        frame: Frame,
+        to: ImageLayoutTransition,
+    ) {
+        recorder.image_transition(self.image(frame), to);
     }
 
     #[inline]

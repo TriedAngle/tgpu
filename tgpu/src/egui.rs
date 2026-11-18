@@ -120,7 +120,7 @@ impl Default for RendererCreateInfo<'_> {
     fn default() -> Self {
         Self {
             label: Some(Label::Name("egui")),
-            color_format: Format::B8G8R8A8_SRGB,
+            color_format: Format::Bgra8UnormSrgb,
             max_frames_in_flight: 3,
             max_textures: 1024,
         }
@@ -602,7 +602,7 @@ impl Renderer {
         let image = self.device.create_view_image(&ViewImageDesc {
             image: ImageDesc {
                 label: Some(Label::Name("egui texture")),
-                format: Format::R8G8B8A8_UNORM,
+                format: Format::Rgba8Unorm,
                 extent,
                 usage: ImageUses::COPY_DST | ImageUses::SAMPLED,
                 ..Default::default()

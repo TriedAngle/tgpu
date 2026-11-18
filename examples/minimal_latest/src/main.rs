@@ -150,8 +150,6 @@ impl Render {
         let preferred_extent = tgpu::Extent2D::new(size.width.max(1), size.height.max(1));
         let swapchain = device.create_swapchain_for_window(&window, preferred_extent)?;
 
-        initialize_swapchain_images(&queue, &swapchain);
-
         let viewport_size = swapchain.extent();
         let gbuffer = create_gbuffer(&device, viewport_size)?;
         let mut egui = tgpu::egui::Renderer::new_for_swapchain(&window, &device, &swapchain)?;
@@ -499,10 +497,8 @@ impl Render {
             tgpu::ImageLayoutTransition::FRAGMENT,
         );
 
-        recorder.image_transition(
-            self.swapchain.image(frame),
-            tgpu::ImageLayoutTransition::COLOR,
-        );
+        self.swapchain
+            .transition_frame(&mut recorder, frame, tgpu::ImageLayoutTransition::COLOR);
         let swapchain_extent = self.swapchain.extent();
         let swapchain_color = tgpu::RenderAttachment::color(self.swapchain.view(frame))
             .clear_color([0.0, 0.0, 0.0, 1.0]);
@@ -516,10 +512,8 @@ impl Render {
                 egui_frame.paint(render, swapchain_extent);
             },
         );
-        recorder.image_transition(
-            self.swapchain.image(frame),
-            tgpu::ImageLayoutTransition::PRESENT,
-        );
+        self.swapchain
+            .transition_frame(&mut recorder, frame, tgpu::ImageLayoutTransition::PRESENT);
 
         let available_semaphore = self.swapchain.available_semaphore(frame);
         let finished_semaphore = self.swapchain.finished_semaphore(frame);
@@ -557,7 +551,6 @@ impl Render {
             tgpu::PresentMode::Mailbox
         });
         self.swapchain.recreate()?;
-        initialize_swapchain_images(&self.queue, &self.swapchain);
         self.egui
             .resize_frames(self.swapchain.max_frames_in_flight());
         ensure_frame_data(
@@ -583,18 +576,6 @@ impl Render {
         self.gbuffer_needs_rebuild = false;
         Ok(())
     }
-}
-
-fn initialize_swapchain_images(queue: &tgpu::Queue, swapchain: &tgpu::Swapchain) {
-    let mut recorder = queue.record();
-    for image in swapchain.images() {
-        recorder.image_transition(image, tgpu::ImageLayoutTransition::PRESENT);
-    }
-    let signal = queue.submit(tgpu::SubmitInfo {
-        records: &[recorder.finish()],
-        ..Default::default()
-    });
-    queue.timeline.wait(signal, None);
 }
 
 fn ensure_frame_data(
@@ -627,8 +608,8 @@ fn create_gbuffer(
     extent: tgpu::Extent2D,
 ) -> Result<GBuffer, tgpu::GPUError> {
     let extent = tgpu::Extent2D::new(extent.width.max(1), extent.height.max(1));
-    let color_format = tgpu::Format::R8G8B8A8_UNORM;
-    let depth_format = tgpu::Format::D32_SFLOAT;
+    let color_format = tgpu::Format::Rgba8Unorm;
+    let depth_format = tgpu::Format::Depth32Float;
     let color = device.create_view_image(&tgpu::ViewImageDesc {
         image: tgpu::ImageDesc {
             label: Some(tgpu::Label::Name("minimal latest gbuffer color")),
@@ -682,7 +663,7 @@ fn create_texture(
     let texture = device.create_view_image(&tgpu::ViewImageDesc {
         image: tgpu::ImageDesc {
             label: Some(tgpu::Label::Name("minimal latest texture")),
-            format: tgpu::Format::R8G8B8A8_UNORM,
+            format: tgpu::Format::Rgba8Unorm,
             extent: size.to_3d(1),
             usage: tgpu::ImageUses::COPY_DST | tgpu::ImageUses::SAMPLED,
             ..Default::default()
@@ -785,19 +766,19 @@ fn create_graphics_pipeline(
         tgpu::VertexAttribute {
             location: 0,
             binding: 0,
-            format: tgpu::Format::R32G32B32_SFLOAT,
+            format: tgpu::Format::Rgb32Float,
             offset: std::mem::offset_of!(Vertex, position) as u32,
         },
         tgpu::VertexAttribute {
             location: 1,
             binding: 0,
-            format: tgpu::Format::R32G32B32_SFLOAT,
+            format: tgpu::Format::Rgb32Float,
             offset: std::mem::offset_of!(Vertex, color) as u32,
         },
         tgpu::VertexAttribute {
             location: 2,
             binding: 0,
-            format: tgpu::Format::R32G32_SFLOAT,
+            format: tgpu::Format::Rg32Float,
             offset: std::mem::offset_of!(Vertex, tex_coord) as u32,
         },
     ];

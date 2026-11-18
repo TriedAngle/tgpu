@@ -15,9 +15,11 @@ mod device;
 #[cfg(feature = "egui")]
 pub mod egui;
 mod format;
+mod freelist;
 mod geometry;
 mod image;
 mod instance;
+mod macros;
 mod pipeline;
 mod queue;
 mod resource;

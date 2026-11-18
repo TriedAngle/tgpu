@@ -1,175 +1,59 @@
 use ash::vk;
 use std::sync::Arc;
 
-use crate::{DescriptorSetLayout, Device, Format, Label, ShaderEntry, raw::DeviceImpl};
+use crate::{
+    DescriptorSetLayout, Device, Format, Label, ShaderEntry, macros::vk_value_enum, raw::DeviceImpl,
+};
 
-#[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
-pub enum CompareOp {
-    Never,
-    Less,
-    Equal,
-    LessOrEqual,
-    Greater,
-    NotEqual,
-    GreaterOrEqual,
-    #[default]
-    Always,
-    Custom(vk::CompareOp),
-}
-
-impl From<CompareOp> for vk::CompareOp {
-    fn from(value: CompareOp) -> Self {
-        match value {
-            CompareOp::Never => vk::CompareOp::NEVER,
-            CompareOp::Less => vk::CompareOp::LESS,
-            CompareOp::Equal => vk::CompareOp::EQUAL,
-            CompareOp::LessOrEqual => vk::CompareOp::LESS_OR_EQUAL,
-            CompareOp::Greater => vk::CompareOp::GREATER,
-            CompareOp::NotEqual => vk::CompareOp::NOT_EQUAL,
-            CompareOp::GreaterOrEqual => vk::CompareOp::GREATER_OR_EQUAL,
-            CompareOp::Always => vk::CompareOp::ALWAYS,
-            CompareOp::Custom(raw) => raw,
-        }
+vk_value_enum! {
+    /// A depth/stencil comparison.
+    CompareOp: vk::CompareOp,
+    default = Always => ALWAYS,
+    {
+        Never => NEVER,
+        Less => LESS,
+        Equal => EQUAL,
+        LessOrEqual => LESS_OR_EQUAL,
+        Greater => GREATER,
+        NotEqual => NOT_EQUAL,
+        GreaterOrEqual => GREATER_OR_EQUAL,
     }
 }
 
-impl From<vk::CompareOp> for CompareOp {
-    fn from(value: vk::CompareOp) -> Self {
-        match value {
-            vk::CompareOp::NEVER => Self::Never,
-            vk::CompareOp::LESS => Self::Less,
-            vk::CompareOp::EQUAL => Self::Equal,
-            vk::CompareOp::LESS_OR_EQUAL => Self::LessOrEqual,
-            vk::CompareOp::GREATER => Self::Greater,
-            vk::CompareOp::NOT_EQUAL => Self::NotEqual,
-            vk::CompareOp::GREATER_OR_EQUAL => Self::GreaterOrEqual,
-            vk::CompareOp::ALWAYS => Self::Always,
-            raw => Self::Custom(raw),
-        }
+vk_value_enum! {
+    /// How vertices are assembled into primitives.
+    PrimitiveTopology: vk::PrimitiveTopology,
+    default = TriangleList => TRIANGLE_LIST,
+    {
+        PointList => POINT_LIST,
+        LineList => LINE_LIST,
+        LineStrip => LINE_STRIP,
+        TriangleStrip => TRIANGLE_STRIP,
+        TriangleFan => TRIANGLE_FAN,
+        LineListWithAdjacency => LINE_LIST_WITH_ADJACENCY,
+        LineStripWithAdjacency => LINE_STRIP_WITH_ADJACENCY,
+        TriangleListWithAdjacency => TRIANGLE_LIST_WITH_ADJACENCY,
+        TriangleStripWithAdjacency => TRIANGLE_STRIP_WITH_ADJACENCY,
+        PatchList => PATCH_LIST,
     }
 }
 
-#[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
-pub enum PrimitiveTopology {
-    #[default]
-    TriangleList,
-    PointList,
-    LineList,
-    LineStrip,
-    TriangleStrip,
-    TriangleFan,
-    LineListWithAdjacency,
-    LineStripWithAdjacency,
-    TriangleListWithAdjacency,
-    TriangleStripWithAdjacency,
-    PatchList,
-    Custom(vk::PrimitiveTopology),
-}
-
-impl From<PrimitiveTopology> for vk::PrimitiveTopology {
-    fn from(value: PrimitiveTopology) -> Self {
-        match value {
-            PrimitiveTopology::TriangleList => vk::PrimitiveTopology::TRIANGLE_LIST,
-            PrimitiveTopology::PointList => vk::PrimitiveTopology::POINT_LIST,
-            PrimitiveTopology::LineList => vk::PrimitiveTopology::LINE_LIST,
-            PrimitiveTopology::LineStrip => vk::PrimitiveTopology::LINE_STRIP,
-            PrimitiveTopology::TriangleStrip => vk::PrimitiveTopology::TRIANGLE_STRIP,
-            PrimitiveTopology::TriangleFan => vk::PrimitiveTopology::TRIANGLE_FAN,
-            PrimitiveTopology::LineListWithAdjacency => {
-                vk::PrimitiveTopology::LINE_LIST_WITH_ADJACENCY
-            }
-            PrimitiveTopology::LineStripWithAdjacency => {
-                vk::PrimitiveTopology::LINE_STRIP_WITH_ADJACENCY
-            }
-            PrimitiveTopology::TriangleListWithAdjacency => {
-                vk::PrimitiveTopology::TRIANGLE_LIST_WITH_ADJACENCY
-            }
-            PrimitiveTopology::TriangleStripWithAdjacency => {
-                vk::PrimitiveTopology::TRIANGLE_STRIP_WITH_ADJACENCY
-            }
-            PrimitiveTopology::PatchList => vk::PrimitiveTopology::PATCH_LIST,
-            PrimitiveTopology::Custom(raw) => raw,
-        }
+vk_value_enum! {
+    /// How polygons are rasterised.
+    PolygonMode: vk::PolygonMode,
+    default = Fill => FILL,
+    {
+        Line => LINE,
+        Point => POINT,
     }
 }
 
-impl From<vk::PrimitiveTopology> for PrimitiveTopology {
-    fn from(value: vk::PrimitiveTopology) -> Self {
-        match value {
-            vk::PrimitiveTopology::TRIANGLE_LIST => Self::TriangleList,
-            vk::PrimitiveTopology::POINT_LIST => Self::PointList,
-            vk::PrimitiveTopology::LINE_LIST => Self::LineList,
-            vk::PrimitiveTopology::LINE_STRIP => Self::LineStrip,
-            vk::PrimitiveTopology::TRIANGLE_STRIP => Self::TriangleStrip,
-            vk::PrimitiveTopology::TRIANGLE_FAN => Self::TriangleFan,
-            vk::PrimitiveTopology::LINE_LIST_WITH_ADJACENCY => Self::LineListWithAdjacency,
-            vk::PrimitiveTopology::LINE_STRIP_WITH_ADJACENCY => Self::LineStripWithAdjacency,
-            vk::PrimitiveTopology::TRIANGLE_LIST_WITH_ADJACENCY => Self::TriangleListWithAdjacency,
-            vk::PrimitiveTopology::TRIANGLE_STRIP_WITH_ADJACENCY => {
-                Self::TriangleStripWithAdjacency
-            }
-            vk::PrimitiveTopology::PATCH_LIST => Self::PatchList,
-            raw => Self::Custom(raw),
-        }
-    }
-}
-
-#[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
-pub enum PolygonMode {
-    #[default]
-    Fill,
-    Line,
-    Point,
-    Custom(vk::PolygonMode),
-}
-
-impl From<PolygonMode> for vk::PolygonMode {
-    fn from(value: PolygonMode) -> Self {
-        match value {
-            PolygonMode::Fill => vk::PolygonMode::FILL,
-            PolygonMode::Line => vk::PolygonMode::LINE,
-            PolygonMode::Point => vk::PolygonMode::POINT,
-            PolygonMode::Custom(raw) => raw,
-        }
-    }
-}
-
-impl From<vk::PolygonMode> for PolygonMode {
-    fn from(value: vk::PolygonMode) -> Self {
-        match value {
-            vk::PolygonMode::FILL => Self::Fill,
-            vk::PolygonMode::LINE => Self::Line,
-            vk::PolygonMode::POINT => Self::Point,
-            raw => Self::Custom(raw),
-        }
-    }
-}
-
-#[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
-pub enum FrontFace {
-    #[default]
-    CounterClockwise,
-    Clockwise,
-    Custom(vk::FrontFace),
-}
-
-impl From<FrontFace> for vk::FrontFace {
-    fn from(value: FrontFace) -> Self {
-        match value {
-            FrontFace::CounterClockwise => vk::FrontFace::COUNTER_CLOCKWISE,
-            FrontFace::Clockwise => vk::FrontFace::CLOCKWISE,
-            FrontFace::Custom(raw) => raw,
-        }
-    }
-}
-
-impl From<vk::FrontFace> for FrontFace {
-    fn from(value: vk::FrontFace) -> Self {
-        match value {
-            vk::FrontFace::COUNTER_CLOCKWISE => Self::CounterClockwise,
-            vk::FrontFace::CLOCKWISE => Self::Clockwise,
-            raw => Self::Custom(raw),
-        }
+vk_value_enum! {
+    /// Which winding order counts as front-facing.
+    FrontFace: vk::FrontFace,
+    default = CounterClockwise => COUNTER_CLOCKWISE,
+    {
+        Clockwise => CLOCKWISE,
     }
 }
 

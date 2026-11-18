@@ -1,11 +1,9 @@
-use parking_lot::Mutex;
-
 use ash::vk;
 
 use crate::{
     Buffer, DescriptorBinding, DescriptorPoolInfo, DescriptorSet, DescriptorSetLayout,
     DescriptorSetLayoutInfo, DescriptorType, DescriptorWrite, Device, ImageLayout, ImageView,
-    Sampler, ShaderStageFlags,
+    Sampler, ShaderStageFlags, freelist::FreeList,
 };
 
 pub const BINDLESS_READ_BUFFER_BINDING: u32 = 0;
@@ -60,18 +58,12 @@ pub struct BindlessHeap {
     uniform_buffers: SlotAllocator,
 }
 
+/// Hands out stable indices into one bindless binding, reusing freed slots.
 #[derive(Debug)]
 struct SlotAllocator {
     kind: &'static str,
     capacity: u32,
-    inner: Mutex<SlotAllocatorInner>,
-}
-
-#[derive(Debug)]
-struct SlotAllocatorInner {
-    next: u32,
-    free: Vec<u32>,
-    used: Vec<bool>,
+    slots: FreeList<()>,
 }
 
 impl SlotAllocator {
@@ -79,37 +71,23 @@ impl SlotAllocator {
         Self {
             kind,
             capacity,
-            inner: Mutex::new(SlotAllocatorInner {
-                next: 0,
-                free: Vec::new(),
-                used: vec![false; capacity as usize],
-            }),
+            slots: FreeList::new(),
         }
     }
 
     fn allocate(&self) -> u32 {
-        let mut inner = self.inner.lock();
-
-        if let Some(slot) = inner.free.pop() {
-            inner.used[slot as usize] = true;
-            return slot;
+        let slot = self.slots.insert(()) as u32;
+        if slot >= self.capacity {
+            self.slots.remove(slot as usize);
+            panic!(
+                "Bindless {} heap exhausted (capacity: {})",
+                self.kind, self.capacity
+            );
         }
-
-        assert!(
-            inner.next < self.capacity,
-            "Bindless {} heap exhausted (capacity: {})",
-            self.kind,
-            self.capacity
-        );
-
-        let slot = inner.next;
-        inner.next += 1;
-        inner.used[slot as usize] = true;
         slot
     }
 
     fn free(&self, slot: u32) {
-        let mut inner = self.inner.lock();
         assert!(
             slot < self.capacity,
             "Bindless {} handle {} is out of range",
@@ -117,17 +95,14 @@ impl SlotAllocator {
             slot
         );
         assert!(
-            inner.used[slot as usize],
+            self.slots.remove(slot as usize).is_some(),
             "Bindless {} handle {} is not allocated",
-            self.kind, slot
+            self.kind,
+            slot
         );
-
-        inner.used[slot as usize] = false;
-        inner.free.push(slot);
     }
 
     fn assert_allocated(&self, slot: u32) {
-        let inner = self.inner.lock();
         assert!(
             slot < self.capacity,
             "Bindless {} handle {} is out of range",
@@ -135,9 +110,10 @@ impl SlotAllocator {
             slot
         );
         assert!(
-            inner.used[slot as usize],
+            self.slots.contains(slot as usize),
             "Bindless {} handle {} is not allocated",
-            self.kind, slot
+            self.kind,
+            slot
         );
     }
 }

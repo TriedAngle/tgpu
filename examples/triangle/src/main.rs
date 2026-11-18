@@ -117,10 +117,8 @@ impl Render {
         log::trace!("Start Frame {:?}", frame.index);
         let mut recorder = self.queue.record();
 
-        recorder.image_transition(
-            self.swapchain.image(frame),
-            tgpu::ImageLayoutTransition::COLOR,
-        );
+        self.swapchain
+            .transition_frame(&mut recorder, frame, tgpu::ImageLayoutTransition::COLOR);
 
         let frame_number = self.frame_count as f32;
 
@@ -147,10 +145,8 @@ impl Render {
             },
         );
 
-        recorder.image_transition(
-            self.swapchain.image(frame),
-            tgpu::ImageLayoutTransition::PRESENT,
-        );
+        self.swapchain
+            .transition_frame(&mut recorder, frame, tgpu::ImageLayoutTransition::PRESENT);
 
         self.swapchain
             .end_frame(&self.queue, frame, &[recorder.finish()])?;

@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use crate::{Buffer, Device, ImageLayout, ImageView, Label, Sampler, raw::RawDevice};
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum DescriptorType {
     UniformBuffer,
     StorageBuffer,
@@ -11,6 +11,10 @@ pub enum DescriptorType {
     SampledImage,
     Sampler,
     CombinedImageSampler,
+    InputAttachment,
+    /// A Khronos value this type does not name, such as a texel buffer or a
+    /// dynamic-offset buffer.
+    Raw(i32),
 }
 
 impl From<DescriptorType> for vk::DescriptorType {
@@ -22,6 +26,23 @@ impl From<DescriptorType> for vk::DescriptorType {
             DescriptorType::SampledImage => vk::DescriptorType::SAMPLED_IMAGE,
             DescriptorType::Sampler => vk::DescriptorType::SAMPLER,
             DescriptorType::CombinedImageSampler => vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+            DescriptorType::InputAttachment => vk::DescriptorType::INPUT_ATTACHMENT,
+            DescriptorType::Raw(raw) => vk::DescriptorType::from_raw(raw),
+        }
+    }
+}
+
+impl From<vk::DescriptorType> for DescriptorType {
+    fn from(ty: vk::DescriptorType) -> Self {
+        match ty {
+            vk::DescriptorType::UNIFORM_BUFFER => DescriptorType::UniformBuffer,
+            vk::DescriptorType::STORAGE_BUFFER => DescriptorType::StorageBuffer,
+            vk::DescriptorType::STORAGE_IMAGE => DescriptorType::StorageImage,
+            vk::DescriptorType::SAMPLED_IMAGE => DescriptorType::SampledImage,
+            vk::DescriptorType::SAMPLER => DescriptorType::Sampler,
+            vk::DescriptorType::COMBINED_IMAGE_SAMPLER => DescriptorType::CombinedImageSampler,
+            vk::DescriptorType::INPUT_ATTACHMENT => DescriptorType::InputAttachment,
+            other => DescriptorType::Raw(other.as_raw()),
         }
     }
 }
@@ -153,6 +174,12 @@ pub enum DescriptorWrite<'a> {
         image_view: &'a ImageView,
         image_layout: ImageLayout,
         sampler: &'a Sampler,
+        array_element: Option<u32>,
+    },
+    InputAttachment {
+        binding: u32,
+        image_view: &'a ImageView,
+        image_layout: ImageLayout,
         array_element: Option<u32>,
     },
 }
@@ -415,6 +442,21 @@ impl DescriptorSet {
                         array_element.unwrap_or(0),
                     ));
                 }
+                DescriptorWrite::InputAttachment {
+                    binding,
+                    image_view,
+                    image_layout,
+                    array_element,
+                } => {
+                    image_infos.push((
+                        *binding,
+                        vk::DescriptorType::INPUT_ATTACHMENT,
+                        vk::DescriptorImageInfo::default()
+                            .image_view(image_view.inner.handle)
+                            .image_layout((*image_layout).into()),
+                        array_element.unwrap_or(0),
+                    ));
+                }
                 DescriptorWrite::CombinedImageSampler {
                     binding,
                     image_view,
@@ -480,5 +522,37 @@ impl Drop for DescriptorPool {
                 .handle
                 .destroy_descriptor_pool(self.handle, None);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn descriptor_type_round_trips_known_values() {
+        for ty in [
+            DescriptorType::UniformBuffer,
+            DescriptorType::StorageBuffer,
+            DescriptorType::StorageImage,
+            DescriptorType::SampledImage,
+            DescriptorType::Sampler,
+            DescriptorType::CombinedImageSampler,
+            DescriptorType::InputAttachment,
+        ] {
+            let raw: vk::DescriptorType = ty.into();
+            assert_eq!(DescriptorType::from(raw), ty);
+        }
+    }
+
+    #[test]
+    fn unmapped_descriptor_types_use_raw() {
+        let ty = DescriptorType::from(vk::DescriptorType::UNIFORM_TEXEL_BUFFER);
+        assert_eq!(
+            ty,
+            DescriptorType::Raw(vk::DescriptorType::UNIFORM_TEXEL_BUFFER.as_raw())
+        );
+        let back: vk::DescriptorType = ty.into();
+        assert_eq!(back, vk::DescriptorType::UNIFORM_TEXEL_BUFFER);
     }
 }

@@ -11,7 +11,7 @@ use vkm::Alloc;
 
 use crate::{
     Allocation, Buffer, CompareOp, Device, Extent2D, Extent3D, Format, GPUError, HostAccess, Label,
-    MemoryPreset, Offset3D, Queue, raw::RawDevice,
+    MemoryPreset, Offset3D, Queue, macros::vk_value_enum, raw::RawDevice,
 };
 
 bitflags::bitflags! {
@@ -36,100 +36,36 @@ impl From<vk::ImageAspectFlags> for ImageAspect {
     }
 }
 
-#[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
-pub enum Filter {
-    Nearest,
-    #[default]
-    Linear,
-    Custom(vk::Filter),
-}
-
-impl From<Filter> for vk::Filter {
-    fn from(value: Filter) -> Self {
-        match value {
-            Filter::Nearest => vk::Filter::NEAREST,
-            Filter::Linear => vk::Filter::LINEAR,
-            Filter::Custom(raw) => raw,
-        }
+vk_value_enum! {
+    /// How texels are sampled.
+    Filter: vk::Filter,
+    default = Linear => LINEAR,
+    {
+        Nearest => NEAREST,
     }
 }
 
-impl From<vk::Filter> for Filter {
-    fn from(value: vk::Filter) -> Self {
-        match value {
-            vk::Filter::NEAREST => Self::Nearest,
-            vk::Filter::LINEAR => Self::Linear,
-            raw => Self::Custom(raw),
-        }
+vk_value_enum! {
+    /// How a mip level is chosen when sampling.
+    SamplerMipmapMode: vk::SamplerMipmapMode,
+    default = Linear => LINEAR,
+    {
+        Nearest => NEAREST,
     }
 }
 
-#[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
-pub enum SamplerMipmapMode {
-    Nearest,
-    #[default]
-    Linear,
-    Custom(vk::SamplerMipmapMode),
-}
-
-impl From<SamplerMipmapMode> for vk::SamplerMipmapMode {
-    fn from(value: SamplerMipmapMode) -> Self {
-        match value {
-            SamplerMipmapMode::Nearest => vk::SamplerMipmapMode::NEAREST,
-            SamplerMipmapMode::Linear => vk::SamplerMipmapMode::LINEAR,
-            SamplerMipmapMode::Custom(raw) => raw,
-        }
+vk_value_enum! {
+    /// What happens when sampling outside the image.
+    SamplerAddressMode: vk::SamplerAddressMode,
+    default = ClampToEdge => CLAMP_TO_EDGE,
+    {
+        Repeat => REPEAT,
+        MirroredRepeat => MIRRORED_REPEAT,
+        ClampToBorder => CLAMP_TO_BORDER,
+        MirrorClampToEdge => MIRROR_CLAMP_TO_EDGE,
     }
 }
 
-impl From<vk::SamplerMipmapMode> for SamplerMipmapMode {
-    fn from(value: vk::SamplerMipmapMode) -> Self {
-        match value {
-            vk::SamplerMipmapMode::NEAREST => Self::Nearest,
-            vk::SamplerMipmapMode::LINEAR => Self::Linear,
-            raw => Self::Custom(raw),
-        }
-    }
-}
-
-#[derive(Debug, Copy, Clone, Default, PartialEq, Eq)]
-pub enum SamplerAddressMode {
-    Repeat,
-    MirroredRepeat,
-    #[default]
-    ClampToEdge,
-    ClampToBorder,
-    MirrorClampToEdge,
-    Custom(vk::SamplerAddressMode),
-}
-
-impl From<SamplerAddressMode> for vk::SamplerAddressMode {
-    fn from(value: SamplerAddressMode) -> Self {
-        match value {
-            SamplerAddressMode::Repeat => vk::SamplerAddressMode::REPEAT,
-            SamplerAddressMode::MirroredRepeat => vk::SamplerAddressMode::MIRRORED_REPEAT,
-            SamplerAddressMode::ClampToEdge => vk::SamplerAddressMode::CLAMP_TO_EDGE,
-            SamplerAddressMode::ClampToBorder => vk::SamplerAddressMode::CLAMP_TO_BORDER,
-            SamplerAddressMode::MirrorClampToEdge => vk::SamplerAddressMode::MIRROR_CLAMP_TO_EDGE,
-            SamplerAddressMode::Custom(raw) => raw,
-        }
-    }
-}
-
-impl From<vk::SamplerAddressMode> for SamplerAddressMode {
-    fn from(value: vk::SamplerAddressMode) -> Self {
-        match value {
-            vk::SamplerAddressMode::REPEAT => Self::Repeat,
-            vk::SamplerAddressMode::MIRRORED_REPEAT => Self::MirroredRepeat,
-            vk::SamplerAddressMode::CLAMP_TO_EDGE => Self::ClampToEdge,
-            vk::SamplerAddressMode::CLAMP_TO_BORDER => Self::ClampToBorder,
-            vk::SamplerAddressMode::MIRROR_CLAMP_TO_EDGE => Self::MirrorClampToEdge,
-            raw => Self::Custom(raw),
-        }
-    }
-}
-
-// TODO: support custom stuff
 bitflags::bitflags! {
     #[derive(Debug, Clone, Copy, Default)]
     pub(crate) struct ImageUsage: u32 {
@@ -451,79 +387,6 @@ impl From<ImageFlags> for vk::ImageCreateFlags {
     }
 }
 
-fn validate_texture_2d_desc(desc: &Texture2DDesc<'_>) -> Result<(), GPUError> {
-    if desc.size.width == 0 || desc.size.height == 0 {
-        return Err(GPUError::Validation(
-            "2D texture size must be greater than zero",
-        ));
-    }
-    if desc.format == Format::UNDEFINED {
-        return Err(GPUError::Validation("2D texture format must be defined"));
-    }
-    if desc.mip_levels == 0 {
-        return Err(GPUError::Validation(
-            "2D texture mip_levels must be greater than zero",
-        ));
-    }
-    if desc.array_layers == 0 {
-        return Err(GPUError::Validation(
-            "2D texture array_layers must be greater than zero",
-        ));
-    }
-
-    let mut usage = desc.usage;
-    if desc.sampler.is_some() {
-        usage |= TextureUses::SAMPLED;
-    }
-    if usage.is_empty() {
-        return Err(GPUError::Validation("2D texture usage must not be empty"));
-    }
-
-    if usage.contains(TextureUses::TRANSIENT_ATTACHMENT) {
-        let attachment_usage = TextureUses::COLOR_ATTACHMENT
-            | TextureUses::DEPTH_STENCIL_ATTACHMENT
-            | TextureUses::INPUT_ATTACHMENT;
-
-        if !usage.intersects(attachment_usage) {
-            return Err(GPUError::Validation(
-                "TRANSIENT_ATTACHMENT requires COLOR_ATTACHMENT, DEPTH_STENCIL_ATTACHMENT, or INPUT_ATTACHMENT",
-            ));
-        }
-
-        let disallowed_usage = TextureUses::COPY_SRC
-            | TextureUses::COPY_DST
-            | TextureUses::SAMPLED
-            | TextureUses::STORAGE;
-        if usage.intersects(disallowed_usage) {
-            return Err(GPUError::Validation(
-                "TRANSIENT_ATTACHMENT cannot be combined with COPY_SRC, COPY_DST, SAMPLED, or STORAGE",
-            ));
-        }
-    }
-
-    if desc.memory == MemoryPreset::TransientAttachment
-        && !usage.contains(TextureUses::TRANSIENT_ATTACHMENT)
-    {
-        return Err(GPUError::Validation(
-            "TransientAttachment memory requires TRANSIENT_ATTACHMENT usage",
-        ));
-    }
-
-    if desc.samples != vk::SampleCountFlags::TYPE_1 && desc.mip_levels != 1 {
-        return Err(GPUError::Validation(
-            "multisampled 2D textures must use mip_levels = 1",
-        ));
-    }
-
-    if desc.samples != vk::SampleCountFlags::TYPE_1 && desc.tiling == vk::ImageTiling::LINEAR {
-        return Err(GPUError::Validation(
-            "multisampled 2D textures cannot use linear tiling",
-        ));
-    }
-
-    Ok(())
-}
-
 fn validate_image_desc(desc: &ImageDesc<'_>) -> Result<(), GPUError> {
     if desc.format == Format::UNDEFINED {
         return Err(GPUError::Validation("image format must be defined"));
@@ -696,12 +559,7 @@ fn infer_image_aspect(format: Format, usage: ImageUses) -> ImageAspect {
         return depth_stencil_aspect(format);
     }
 
-    let depth_stencil = depth_stencil_aspect(format);
-    if !depth_stencil.is_empty() {
-        return depth_stencil;
-    }
-
-    ImageAspect::COLOR
+    infer_aspect_from_format(format)
 }
 
 fn infer_image_view_type(desc: &ImageDesc<'_>) -> vk::ImageViewType {
@@ -724,11 +582,11 @@ fn infer_image_view_type(desc: &ImageDesc<'_>) -> vk::ImageViewType {
 
 fn depth_stencil_aspect(format: Format) -> ImageAspect {
     match format {
-        Format::D16_UNORM | Format::X8_D24_UNORM_PACK32 | Format::D32_SFLOAT => ImageAspect::DEPTH,
-        Format::S8_UINT => ImageAspect::STENCIL,
-        Format::D16_UNORM_S8_UINT | Format::D24_UNORM_S8_UINT | Format::D32_SFLOAT_S8_UINT => {
-            ImageAspect::DEPTH_STENCIL
-        }
+        Format::Depth16Unorm | Format::Depth24Unorm | Format::Depth32Float => ImageAspect::DEPTH,
+        Format::Stencil8 => ImageAspect::STENCIL,
+        Format::Depth16UnormStencil8
+        | Format::Depth24UnormStencil8
+        | Format::Depth32FloatStencil8 => ImageAspect::DEPTH_STENCIL,
         _ => ImageAspect::empty(),
     }
 }
@@ -1229,8 +1087,6 @@ impl Device {
     }
 
     pub fn create_texture_2d(&self, desc: &Texture2DDesc<'_>) -> Result<ViewImage, GPUError> {
-        validate_texture_2d_desc(desc)?;
-
         let mut usage = desc.usage;
         if desc.sampler.is_some() {
             usage |= TextureUses::SAMPLED;
