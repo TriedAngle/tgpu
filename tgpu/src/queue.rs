@@ -16,6 +16,39 @@ pub struct QueueRequest {
     pub allow_fallback_share: bool,
 }
 
+impl QueueRequest {
+    pub fn new(required_flags: vk::QueueFlags) -> Self {
+        Self {
+            required_flags,
+            exclude_flags: vk::QueueFlags::empty(),
+            strict: false,
+            allow_fallback_share: true,
+        }
+    }
+
+    pub fn graphics() -> Self {
+        Self::new(vk::QueueFlags::GRAPHICS)
+    }
+
+    pub fn compute() -> Self {
+        Self::new(vk::QueueFlags::COMPUTE)
+    }
+
+    pub fn transfer() -> Self {
+        Self::new(vk::QueueFlags::TRANSFER)
+    }
+
+    pub fn graphics_compute() -> Self {
+        Self::new(vk::QueueFlags::GRAPHICS | vk::QueueFlags::COMPUTE)
+    }
+}
+
+impl Default for QueueRequest {
+    fn default() -> Self {
+        Self::graphics()
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub struct QueueFamilyInfo {
     pub flags: vk::QueueFlags,
@@ -64,7 +97,7 @@ impl QueueImpl {
     ) -> Option<Vec<QueueFamilyInfo>> {
         let pdev = adapter.handle;
 
-        let queue_families = unsafe { instance.queue_family_properties(pdev) };
+        let queue_families = unsafe { instance.queue_properties(pdev) };
         let mut result = vec![None; queue_requests.len()];
         let mut used_queues: Vec<(u32, u32)> = Vec::new(); // (family_index, count)
         let mut used_family_indices = std::collections::HashSet::new();

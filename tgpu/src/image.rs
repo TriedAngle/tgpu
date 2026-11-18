@@ -1,4 +1,10 @@
-use std::{fmt, ops, sync::Arc};
+use std::{
+    fmt, ops,
+    sync::{
+        Arc,
+        atomic::{AtomicI32, Ordering},
+    },
+};
 
 use ash::vk;
 use vkm::Alloc;
@@ -361,6 +367,7 @@ pub struct Texture2DDesc<'a> {
     pub format: Format,
     pub usage: TextureUses,
     pub memory: MemoryPreset,
+    pub host_access: HostAccess,
     pub sampler: Option<SamplerCreateInfo<'a>>,
     pub mip_levels: u32,
     pub array_layers: u32,
@@ -378,6 +385,7 @@ impl Default for Texture2DDesc<'_> {
             format: Format::UNDEFINED,
             usage: TextureUses::empty(),
             memory: MemoryPreset::GpuOnly,
+            host_access: HostAccess::None,
             sampler: None,
             mip_levels: 1,
             array_layers: 1,
@@ -670,6 +678,19 @@ fn validate_view_image_desc(desc: &ViewImageDesc<'_>) -> Result<(), GPUError> {
     Ok(())
 }
 
+/// Infers the aspect mask for an image from its format alone.
+///
+/// Sufficient for barriers: a depth/stencil format is never used as a color
+/// attachment, so the format determines the aspect.
+pub(crate) fn infer_aspect_from_format(format: Format) -> ImageAspect {
+    let depth_stencil = depth_stencil_aspect(format);
+    if depth_stencil.is_empty() {
+        ImageAspect::COLOR
+    } else {
+        depth_stencil
+    }
+}
+
 fn infer_image_aspect(format: Format, usage: ImageUses) -> ImageAspect {
     if usage.contains(ImageUses::DEPTH_STENCIL_ATTACHMENT) {
         return depth_stencil_aspect(format);
@@ -722,6 +743,12 @@ pub struct ImageImpl {
     pub handle: vk::Image,
     pub device: RawDevice,
     pub allocation: Option<Allocation>,
+    /// The layout the last *recorded* transition left the image in.
+    ///
+    /// This is recording-time bookkeeping only: it says what the command
+    /// stream says the image will be in, not what the GPU is doing right now.
+    /// It is not synchronized, and resources are single-threaded by design.
+    pub(crate) current_layout: AtomicI32,
 }
 
 #[derive(Debug, Clone)]
@@ -1064,6 +1091,7 @@ impl ImageImpl {
             handle,
             device,
             allocation,
+            current_layout: AtomicI32::new(info.layout.into_vk().as_raw()),
         })
     }
 }
@@ -1161,10 +1189,6 @@ impl Device {
         })
     }
 
-    pub fn create_image_with(&self, desc: &ImageDesc<'_>) -> Result<Image, GPUError> {
-        self.create_image(desc)
-    }
-
     pub fn create_view_image(&self, desc: &ViewImageDesc<'_>) -> Result<ViewImage, GPUError> {
         validate_view_image_desc(desc)?;
 
@@ -1204,21 +1228,8 @@ impl Device {
         })
     }
 
-    pub fn create_view_image_with(&self, desc: &ViewImageDesc<'_>) -> Result<ViewImage, GPUError> {
-        self.create_view_image(desc)
-    }
-
     pub fn create_texture_2d(&self, desc: &Texture2DDesc<'_>) -> Result<ViewImage, GPUError> {
         validate_texture_2d_desc(desc)?;
-
-        if matches!(
-            desc.memory,
-            MemoryPreset::Upload | MemoryPreset::Readback | MemoryPreset::Dynamic
-        ) {
-            return Err(GPUError::Validation(
-                "Texture2DDesc only supports GpuOnly or TransientAttachment memory; use ImageDesc for explicit image allocation",
-            ));
-        }
 
         let mut usage = desc.usage;
         if desc.sampler.is_some() {
@@ -1236,6 +1247,7 @@ impl Device {
                 samples: desc.samples,
                 usage,
                 memory: desc.memory,
+                host_access: desc.host_access,
                 label: desc.label.clone(),
                 ..Default::default()
             },
@@ -1254,7 +1266,6 @@ impl Device {
 #[derive(Debug, Copy, Clone)]
 pub enum ImageLayout {
     Undefined,
-    Unified,
     General,
     Compute,
     Fragment,
@@ -1278,11 +1289,14 @@ impl Default for ImageLayout {
     }
 }
 
+/// Describes a layout change for one image.
+///
+/// The source layout is taken from the image's tracked layout, and the aspect
+/// is inferred from the image format, so the common case is simply
+/// `recorder.image_transition(image, ImageLayoutTransition::COLOR)`.
 #[derive(Debug, Clone)]
 pub struct ImageTransition<'a> {
-    pub from: ImageLayoutTransition,
     pub to: ImageLayoutTransition,
-    pub aspect: ImageAspect,
     pub mips: ops::Range<u32>,
     pub layers: ops::Range<u32>,
     pub queue: Option<(&'a Queue, &'a Queue)>,
@@ -1292,13 +1306,20 @@ pub struct ImageTransition<'a> {
 impl Default for ImageTransition<'_> {
     fn default() -> Self {
         Self {
-            from: ImageLayoutTransition::default(),
             to: ImageLayoutTransition::default(),
-            aspect: ImageAspect::empty(),
             mips: 0..1,
             layers: 0..1,
             queue: None,
             dependency: vk::DependencyFlags::empty(),
+        }
+    }
+}
+
+impl<'a> From<ImageLayoutTransition> for ImageTransition<'a> {
+    fn from(to: ImageLayoutTransition) -> Self {
+        Self {
+            to,
+            ..Default::default()
         }
     }
 }
@@ -1339,10 +1360,6 @@ impl ImageLayout {
     pub const fn infer_stage_flags(&self) -> (vk::PipelineStageFlags2, vk::AccessFlags2) {
         match self {
             ImageLayout::Undefined => (vk::PipelineStageFlags2::NONE, vk::AccessFlags2::NONE),
-            ImageLayout::Unified => (
-                vk::PipelineStageFlags2::ALL_COMMANDS,
-                vk::AccessFlags2::NONE,
-            ),
             ImageLayout::General => (
                 vk::PipelineStageFlags2::ALL_COMMANDS,
                 vk::AccessFlags2::from_raw(
@@ -1383,7 +1400,13 @@ impl ImageLayout {
                 vk::PipelineStageFlags2::BOTTOM_OF_PIPE,
                 vk::AccessFlags2::empty(),
             ),
-            Self::Custom(_) => panic!("Custom cannot infer"),
+            Self::Custom(_) => (
+                vk::PipelineStageFlags2::ALL_COMMANDS,
+                vk::AccessFlags2::from_raw(
+                    vk::AccessFlags2::MEMORY_READ.as_raw()
+                        | vk::AccessFlags2::MEMORY_WRITE.as_raw(),
+                ),
+            ),
         }
     }
 }
@@ -1392,7 +1415,6 @@ impl From<ImageLayout> for vk::ImageLayout {
     fn from(value: ImageLayout) -> Self {
         match value {
             ImageLayout::Undefined => vk::ImageLayout::UNDEFINED,
-            ImageLayout::Unified => unimplemented!("Wait for Vulkan ash to implement this"),
             ImageLayout::General => vk::ImageLayout::GENERAL,
             ImageLayout::Compute => vk::ImageLayout::GENERAL,
             ImageLayout::Fragment => vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL,
@@ -1401,6 +1423,48 @@ impl From<ImageLayout> for vk::ImageLayout {
             ImageLayout::TransferDst => vk::ImageLayout::TRANSFER_DST_OPTIMAL,
             ImageLayout::Present => vk::ImageLayout::PRESENT_SRC_KHR,
             ImageLayout::Custom(layout) => layout,
+        }
+    }
+}
+
+impl Image {
+    /// The layout the last recorded transition left this image in.
+    pub fn layout(&self) -> ImageLayout {
+        ImageLayout::from_raw(self.inner.current_layout.load(Ordering::Relaxed))
+    }
+
+    pub(crate) fn set_layout(&self, layout: ImageLayout) {
+        self.inner
+            .current_layout
+            .store(layout.into_vk().as_raw(), Ordering::Relaxed);
+    }
+}
+
+impl ImageLayout {
+    /// Raw `VkImageLayout` value for this layout.
+    pub fn into_vk(self) -> vk::ImageLayout {
+        self.into()
+    }
+
+    /// Rebuilds a layout from a raw `VkImageLayout` value.
+    ///
+    /// Note that [`ImageLayout::Compute`] and [`ImageLayout::General`] share
+    /// the same Vulkan layout, so a round trip yields `General`.
+    pub fn from_raw(raw: i32) -> Self {
+        match raw {
+            r if r == vk::ImageLayout::UNDEFINED.as_raw() => Self::Undefined,
+            r if r == vk::ImageLayout::GENERAL.as_raw() => Self::General,
+            r if r == vk::ImageLayout::SHADER_READ_ONLY_OPTIMAL.as_raw() => Self::Fragment,
+            r if r == vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL.as_raw() => Self::Color,
+            r if r == vk::ImageLayout::DEPTH_STENCIL_ATTACHMENT_OPTIMAL.as_raw() => {
+                Self::DepthStencil
+            }
+            r if r == vk::ImageLayout::TRANSFER_DST_OPTIMAL.as_raw() => Self::TransferDst,
+            r if r == vk::ImageLayout::TRANSFER_SRC_OPTIMAL.as_raw() => {
+                Self::Custom(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+            }
+            r if r == vk::ImageLayout::PRESENT_SRC_KHR.as_raw() => Self::Present,
+            r => Self::Custom(vk::ImageLayout::from_raw(r)),
         }
     }
 }

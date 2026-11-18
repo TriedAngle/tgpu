@@ -2,6 +2,7 @@ use ash::vk;
 use raw_window_handle::RawDisplayHandle;
 use std::borrow::Cow;
 use std::ffi;
+use std::fmt;
 use std::sync::Arc;
 
 use crate::{
@@ -23,6 +24,9 @@ pub struct InstanceImpl {
 pub struct InstanceCreateInfo<'a> {
     pub app_name: &'a str,
     pub engine_name: &'a str,
+    /// Display the instance will present to. Enables the platform surface
+    /// extensions for that display; leave `None` for headless use.
+    pub display: Option<RawDisplayHandle>,
 }
 
 impl Instance {
@@ -30,29 +34,7 @@ impl Instance {
         let app_name = ffi::CString::new(info.app_name).expect("Convert to cstring");
         let engine_name = ffi::CString::new(info.engine_name).expect("Convert to cstring");
 
-        let (extensions, flags) = Self::get_required_extensions_and_flags(None)?;
-
-        let validation_layer = ffi::CString::new("VK_LAYER_KHRONOS_validation")
-            .expect("Create Validation Layer String");
-
-        let layers = vec![validation_layer.as_ptr()];
-
-        let instance =
-            unsafe { InstanceImpl::new(&app_name, &engine_name, &extensions, &layers, flags)? };
-
-        let instance = Arc::new(instance);
-
-        Ok(Self { inner: instance })
-    }
-
-    pub fn new_with_display(
-        info: &InstanceCreateInfo<'_>,
-        display: RawDisplayHandle,
-    ) -> Result<Self, GPUError> {
-        let app_name = ffi::CString::new(info.app_name).expect("Convert to cstring");
-        let engine_name = ffi::CString::new(info.engine_name).expect("Convert to cstring");
-
-        let (extensions, flags) = Self::get_required_extensions_and_flags(Some(display))?;
+        let (extensions, flags) = Self::get_required_extensions_and_flags(info.display)?;
 
         let validation_layer = ffi::CString::new("VK_LAYER_KHRONOS_validation")
             .expect("Create Validation Layer String");
@@ -95,8 +77,16 @@ impl Instance {
             .collect())
     }
 
-    pub fn default_adapter(&self, formats: &[Format]) -> Result<Option<RankedAdapter>, GPUError> {
-        Ok(self.rank_adapters(formats)?.into_iter().next())
+    /// Picks the best adapter without requiring a particular format list.
+    ///
+    /// Use [`Instance::rank_adapters`] if you need to score adapters against
+    /// specific formats.
+    pub fn default_adapter(&self) -> Result<Adapter, GPUError> {
+        self.rank_adapters(&[])?
+            .into_iter()
+            .next()
+            .map(|ranked| ranked.adapter)
+            .ok_or(GPUError::Validation("no suitable Vulkan adapter found"))
     }
 
     fn get_required_extensions_and_flags(
@@ -375,16 +365,6 @@ impl InstanceImpl {
             .collect::<Vec<_>>()
     }
 
-    pub unsafe fn queue_family_properties(
-        &self,
-        pdev: vk::PhysicalDevice,
-    ) -> Vec<vk::QueueFamilyProperties> {
-        unsafe {
-            self.handle
-                .get_physical_device_queue_family_properties(pdev)
-        }
-    }
-
     pub unsafe fn create_device_handle(
         &self,
         info: &vk::DeviceCreateInfo,
@@ -395,6 +375,14 @@ impl InstanceImpl {
                 .create_device(pdev, info, None)
                 .expect("Create Device")
         }
+    }
+}
+
+impl fmt::Debug for InstanceImpl {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("InstanceImpl")
+            .field("handle", &self.handle.handle())
+            .finish()
     }
 }
 

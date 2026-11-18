@@ -78,17 +78,42 @@ pub use instance::{Instance, InstanceCreateInfo};
 pub use pipeline::{
     ColorBlend, CompareOp, ComputePipeline, ComputePipelineInfo, CullMode, FrontFace, PolygonMode,
     PrimitiveTopology, RenderPipeline, RenderPipelineInfo, VertexAttribute, VertexBufferLayout,
-    VertexInput, VertexInputRate,
+    VertexInput, VertexInputRate, push_constant_size,
 };
 pub use queue::{Queue, QueueFamilyInfo, QueueRequest};
 pub use resource::{HostAccess, MemoryPreset};
 pub use shader::{Shader, ShaderEntry, ShaderSource};
-pub use swapchain::{Frame, PresentMode, Swapchain, SwapchainCreateInfo};
+pub use swapchain::{FormatSelector, Frame, PresentMode, Swapchain, SwapchainCreateInfo};
 pub use sync::Semaphore;
+
+/// Compile-time check that the core structures can be shared across threads.
+///
+/// Individual resources ([`Buffer`], [`Image`], …) and recorders
+/// ([`CommandRecorder`], [`RenderRecorder`]) are deliberately *not* thread safe:
+/// they are created, recorded and mapped on one thread. What must be shareable
+/// is the device/queue layer, so that command buffers can be recorded on
+/// several threads and submitted from any of them.
+#[allow(dead_code)]
+fn assert_core_thread_safety() {
+    fn assert_send_sync<T: Send + Sync>() {}
+
+    assert_send_sync::<Instance>();
+    assert_send_sync::<Adapter>();
+    assert_send_sync::<Device>();
+    assert_send_sync::<Queue>();
+    assert_send_sync::<Semaphore>();
+    assert_send_sync::<CommandPools>();
+    assert_send_sync::<CommandBuffer>();
+    assert_send_sync::<BindlessHeap>();
+    assert_send_sync::<DescriptorSet>();
+    assert_send_sync::<DescriptorPool>();
+    assert_send_sync::<DescriptorSetLayout>();
+}
 
 pub enum GPUError {
     Vulkan(vk::Result),
     Validation(&'static str),
+    Shader(String),
 }
 
 impl fmt::Debug for GPUError {
@@ -96,6 +121,7 @@ impl fmt::Debug for GPUError {
         match self {
             Self::Vulkan(result) => write!(f, "Vulkan error: {:?}", result),
             Self::Validation(message) => write!(f, "Validation error: {message}"),
+            Self::Shader(message) => write!(f, "Shader error: {message}"),
         }
     }
 }
@@ -105,6 +131,7 @@ impl fmt::Display for GPUError {
         match self {
             Self::Vulkan(result) => write!(f, "Vulkan error: {:?}", result),
             Self::Validation(message) => write!(f, "Validation error: {message}"),
+            Self::Shader(message) => write!(f, "Shader error: {message}"),
         }
     }
 }
@@ -114,6 +141,7 @@ impl std::error::Error for GPUError {
         match self {
             Self::Vulkan(_) => None,
             Self::Validation(_) => None,
+            Self::Shader(_) => None,
         }
     }
 }

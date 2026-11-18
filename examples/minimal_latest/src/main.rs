@@ -1,6 +1,6 @@
 use std::{error::Error, path::Path, time::Instant};
 
-use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
+use raw_window_handle::HasDisplayHandle;
 use tgpu::egui::egui;
 use winit::{
     application::ApplicationHandler,
@@ -121,9 +121,9 @@ pub struct Render {
     frame_ring_current: usize,
     swapchain_needs_rebuild: bool,
     gbuffer_needs_rebuild: bool,
-    gbuffer_initialized: bool,
     vertex_was_read: bool,
     v_sync: bool,
+    exit_requested: bool,
     image_id: usize,
     viewport_size: tgpu::Extent2D,
     clear_color: [f32; 4],
@@ -136,40 +136,19 @@ pub struct Render {
 impl Render {
     pub fn new(window: Window) -> Result<Self, Box<dyn Error>> {
         let display = window.display_handle()?.as_raw();
-        let instance = tgpu::Instance::new_with_display(
-            &tgpu::InstanceCreateInfo {
-                app_name: "tgpu minimal latest",
-                engine_name: "tgpu example",
-            },
-            display,
-        )?;
+        let instance = tgpu::Instance::new(&tgpu::InstanceCreateInfo {
+            app_name: "tgpu minimal latest",
+            engine_name: "tgpu example",
+            display: Some(display),
+        })?;
 
-        let adapter = instance
-            .default_adapter(&[])?
-            .expect("No Vulkan adapter found")
-            .adapter;
-        let (device, mut queues) = instance.request_device(
-            &tgpu::DeviceCreateInfo::default(),
-            adapter,
-            &[tgpu::QueueRequest {
-                required_flags: tgpu::QueueFlags::GRAPHICS | tgpu::QueueFlags::COMPUTE,
-                exclude_flags: tgpu::QueueFlags::empty(),
-                strict: false,
-                allow_fallback_share: true,
-            }],
-        )?;
-        let queue = queues.next().unwrap();
+        let adapter = instance.default_adapter()?;
+
+        let (device, queue) = adapter.request_device(&tgpu::DeviceCreateInfo::default())?;
 
         let size = window.inner_size();
         let preferred_extent = tgpu::Extent2D::new(size.width.max(1), size.height.max(1));
-        let swapchain = device.create_swapchain(&tgpu::SwapchainCreateInfo {
-            display,
-            window: window.window_handle()?.as_raw(),
-            preferred_extent,
-            preferred_image_count: 3,
-            preferred_present_mode: tgpu::PresentMode::Fifo,
-            format_selector: Box::new(select_surface_format),
-        })?;
+        let swapchain = device.create_swapchain_for_window(&window, preferred_extent)?;
 
         initialize_swapchain_images(&queue, &swapchain);
 
@@ -187,26 +166,28 @@ impl Render {
             ..Default::default()
         });
 
-        let vertex_buffer = device.create_buffer(&tgpu::BufferDesc {
-            label: Some(tgpu::Label::Name("minimal latest vertices")),
-            size: std::mem::size_of_val(&VERTICES),
-            usage: tgpu::BufferUses::VERTEX | tgpu::BufferUses::STORAGE,
-            memory: tgpu::MemoryPreset::Dynamic,
-            host_access: tgpu::HostAccess::WriteSequential,
-            ..Default::default()
-        })?;
-        vertex_buffer.write_slice(&VERTICES);
+        let vertex_buffer = device.create_buffer_from_slice(
+            &VERTICES,
+            &tgpu::BufferDesc {
+                label: Some(tgpu::Label::Name("minimal latest vertices")),
+                usage: tgpu::BufferUses::VERTEX | tgpu::BufferUses::STORAGE,
+                memory: tgpu::MemoryPreset::Dynamic,
+                host_access: tgpu::HostAccess::WriteSequential,
+                ..Default::default()
+            },
+        )?;
         let vertex_handle = bindless.add_rw_buffer(&vertex_buffer);
 
-        let points_buffer = device.create_buffer(&tgpu::BufferDesc {
-            label: Some(tgpu::Label::Name("minimal latest points")),
-            size: std::mem::size_of_val(&POINTS),
-            usage: tgpu::BufferUses::STORAGE,
-            memory: tgpu::MemoryPreset::Dynamic,
-            host_access: tgpu::HostAccess::WriteSequential,
-            ..Default::default()
-        })?;
-        points_buffer.write_slice(&POINTS);
+        let points_buffer = device.create_buffer_from_slice(
+            &POINTS,
+            &tgpu::BufferDesc {
+                label: Some(tgpu::Label::Name("minimal latest points")),
+                usage: tgpu::BufferUses::STORAGE,
+                memory: tgpu::MemoryPreset::Dynamic,
+                host_access: tgpu::HostAccess::WriteSequential,
+                ..Default::default()
+            },
+        )?;
         let points_handle = bindless.add_read_buffer(&points_buffer);
 
         let sampler = device.create_sampler(&tgpu::SamplerCreateInfo {
@@ -240,20 +221,19 @@ impl Render {
             swapchain.max_frames_in_flight(),
         )?;
 
-        let shader = device
-            .create_shader(
-                Some(tgpu::Label::Name("minimal latest shader")),
-                tgpu::ShaderSource::Slang(SHADER.as_bytes()),
-            )
-            .map_err(|err| format!("failed to compile minimal_latest shader: {err}"))?;
+        let shader = device.create_shader(
+            Some(tgpu::Label::Name("minimal latest shader")),
+            tgpu::ShaderSource::Slang(SHADER.as_bytes()),
+        )?;
 
         let compute_pipeline = device.create_compute_pipeline(&tgpu::ComputePipelineInfo {
             label: Some(tgpu::Label::Name("minimal latest compute")),
             shader: shader.entry("computeMain"),
             descriptor_layouts: &[bindless.layout()],
-            push_constant_size: Some(std::mem::size_of::<PushData>() as u32),
+            push_constant_size: tgpu::push_constant_size::<PushData>(),
             cache: None,
         });
+
         let graphics_pipeline_without_texture = create_graphics_pipeline(
             &device,
             &bindless,
@@ -297,9 +277,9 @@ impl Render {
             frame_ring_current: 0,
             swapchain_needs_rebuild: false,
             gbuffer_needs_rebuild: false,
-            gbuffer_initialized: false,
             vertex_was_read: false,
-            v_sync: true,
+            v_sync: false,
+            exit_requested: false,
             image_id: 0,
             viewport_size,
             clear_color: [0.2, 0.2, 0.3, 1.0],
@@ -335,6 +315,7 @@ impl Render {
         let mut image_id = self.image_id;
         let mut clear_color = self.clear_color;
         let mut v_sync = self.v_sync;
+        let mut exit_requested = false;
         let mut request_swapchain_rebuild = false;
         let mut requested_viewport = self.viewport_size;
         let fps = 1.0 / self.delta_time;
@@ -348,11 +329,13 @@ impl Render {
                 &mut clear_color,
                 &mut v_sync,
                 &mut request_swapchain_rebuild,
+                &mut exit_requested,
                 &mut requested_viewport,
                 fps,
             );
         })?;
 
+        self.exit_requested = exit_requested;
         self.image_id = image_id.min(self.texture_handles.len().saturating_sub(1));
         self.clear_color = clear_color;
         if self.v_sync != v_sync || request_swapchain_rebuild {
@@ -394,9 +377,26 @@ impl Render {
             tex_id: self.image_id as u32,
             _pad0: [0; 3],
         };
-        self.frame_data[ring].scene_buffer.write_slice(&[scene]);
-
         let mut recorder = self.queue.record();
+
+        // Update the scene info from the GPU instead of writing mapped memory.
+        recorder.buffer_transition(
+            &self.frame_data[ring].scene_buffer,
+            tgpu::BufferTransition {
+                from: tgpu::BufferAccessTransition::uniform_read(),
+                to: tgpu::BufferAccessTransition::TRANSFER_DST,
+                ..Default::default()
+            },
+        );
+        recorder.update_buffer_slice(&self.frame_data[ring].scene_buffer, &[scene]);
+        recorder.buffer_transition(
+            &self.frame_data[ring].scene_buffer,
+            tgpu::BufferTransition {
+                from: tgpu::BufferAccessTransition::TRANSFER_DST,
+                to: tgpu::BufferAccessTransition::uniform_read(),
+                ..Default::default()
+            },
+        );
         egui_frame.record_uploads(&mut recorder);
 
         let vertex_from = if self.vertex_was_read {
@@ -412,15 +412,9 @@ impl Render {
                 ..Default::default()
             },
         );
-        recorder.bind_compute_pipeline(&self.compute_pipeline);
-        recorder.bind_compute_descriptor_set(
+        recorder.bind_compute(
+            &self.compute_pipeline,
             self.bindless.descriptor_set(),
-            &self.compute_pipeline,
-            0,
-            &[],
-        );
-        recorder.push_compute_constants(
-            &self.compute_pipeline,
             PushData {
                 vertex_buffer: self.vertex_handle,
                 rotation_angle: 1.2 * self.delta_time,
@@ -443,31 +437,14 @@ impl Render {
             },
         );
 
-        let color_from = if self.gbuffer_initialized {
-            tgpu::ImageLayoutTransition::FRAGMENT
-        } else {
-            tgpu::ImageLayoutTransition::UNDEFINED
-        };
         recorder.image_transition(
             &self.gbuffer.color.image,
-            tgpu::ImageTransition {
-                from: color_from,
-                to: tgpu::ImageLayoutTransition::COLOR,
-                aspect: tgpu::ImageAspect::COLOR,
-                ..Default::default()
-            },
+            tgpu::ImageLayoutTransition::COLOR,
         );
-        if !self.gbuffer_initialized {
-            recorder.image_transition(
-                &self.gbuffer.depth.image,
-                tgpu::ImageTransition {
-                    from: tgpu::ImageLayoutTransition::UNDEFINED,
-                    to: depth_attachment_access(),
-                    aspect: tgpu::ImageAspect::DEPTH,
-                    ..Default::default()
-                },
-            );
-        }
+        recorder.image_transition(
+            &self.gbuffer.depth.image,
+            tgpu::ImageLayoutTransition::DEPTH_STENCIL,
+        );
 
         let gbuffer_color =
             tgpu::RenderAttachment::color(&self.gbuffer.color.view).clear_color(self.clear_color);
@@ -498,49 +475,33 @@ impl Render {
                     color: [1.0, 0.0, 0.0, 1.0],
                 };
 
-                render.bind_render_pipeline(&self.graphics_pipeline_without_texture);
-                render.bind_render_descriptor_set(
-                    self.bindless.descriptor_set(),
+                render.bind_render(
                     &self.graphics_pipeline_without_texture,
-                    0,
-                    &[],
+                    self.bindless.descriptor_set(),
+                    base_push,
                 );
-                render.push_render_constants(&self.graphics_pipeline_without_texture, base_push);
                 render.draw(0..3, 0..1);
 
                 let textured_push = PushData {
                     color: [0.0, 1.0, 0.0, 1.0],
                     ..base_push
                 };
-                render.bind_render_pipeline(&self.graphics_pipeline_with_texture);
-                render.bind_render_descriptor_set(
-                    self.bindless.descriptor_set(),
+                render.bind_render(
                     &self.graphics_pipeline_with_texture,
-                    0,
-                    &[],
+                    self.bindless.descriptor_set(),
+                    textured_push,
                 );
-                render.push_render_constants(&self.graphics_pipeline_with_texture, textured_push);
                 render.draw(3..6, 0..1);
             },
         );
         recorder.image_transition(
             &self.gbuffer.color.image,
-            tgpu::ImageTransition {
-                from: tgpu::ImageLayoutTransition::COLOR,
-                to: tgpu::ImageLayoutTransition::FRAGMENT,
-                aspect: tgpu::ImageAspect::COLOR,
-                ..Default::default()
-            },
+            tgpu::ImageLayoutTransition::FRAGMENT,
         );
 
         recorder.image_transition(
             self.swapchain.image(frame),
-            tgpu::ImageTransition {
-                from: tgpu::ImageLayoutTransition::PRESENT,
-                to: tgpu::ImageLayoutTransition::COLOR,
-                aspect: tgpu::ImageAspect::COLOR,
-                ..Default::default()
-            },
+            tgpu::ImageLayoutTransition::COLOR,
         );
         let swapchain_extent = self.swapchain.extent();
         let swapchain_color = tgpu::RenderAttachment::color(self.swapchain.view(frame))
@@ -557,12 +518,7 @@ impl Render {
         );
         recorder.image_transition(
             self.swapchain.image(frame),
-            tgpu::ImageTransition {
-                from: tgpu::ImageLayoutTransition::COLOR,
-                to: tgpu::ImageLayoutTransition::PRESENT,
-                aspect: tgpu::ImageAspect::COLOR,
-                ..Default::default()
-            },
+            tgpu::ImageLayoutTransition::PRESENT,
         );
 
         let available_semaphore = self.swapchain.available_semaphore(frame);
@@ -584,7 +540,6 @@ impl Render {
 
         self.frame_ring_current =
             (self.frame_ring_current + 1) % self.swapchain.max_frames_in_flight();
-        self.gbuffer_initialized = true;
         self.vertex_was_read = true;
         self.frame_count += 1;
 
@@ -625,44 +580,15 @@ impl Render {
         self.egui
             .update_user_texture(self.gbuffer_texture, &gbuffer.color, gbuffer.extent)?;
         self.gbuffer = gbuffer;
-        self.gbuffer_initialized = false;
         self.gbuffer_needs_rebuild = false;
         Ok(())
     }
 }
 
-fn select_surface_format(formats: &[tgpu::SurfaceFormat]) -> tgpu::SurfaceFormat {
-    let preferred = [
-        tgpu::Format::B8G8R8A8_UNORM,
-        tgpu::Format::R8G8B8A8_UNORM,
-        tgpu::Format::B8G8R8A8_SRGB,
-    ];
-    preferred
-        .into_iter()
-        .find_map(|format| {
-            formats
-                .iter()
-                .find(|candidate| {
-                    candidate.format == format
-                        && candidate.color_space == tgpu::ColorSpace::SRGB_NONLINEAR
-                })
-                .copied()
-        })
-        .unwrap_or(formats[0])
-}
-
 fn initialize_swapchain_images(queue: &tgpu::Queue, swapchain: &tgpu::Swapchain) {
     let mut recorder = queue.record();
     for image in swapchain.images() {
-        recorder.image_transition(
-            image,
-            tgpu::ImageTransition {
-                from: tgpu::ImageLayoutTransition::UNDEFINED,
-                to: tgpu::ImageLayoutTransition::PRESENT,
-                aspect: tgpu::ImageAspect::COLOR,
-                ..Default::default()
-            },
-        );
+        recorder.image_transition(image, tgpu::ImageLayoutTransition::PRESENT);
     }
     let signal = queue.submit(tgpu::SubmitInfo {
         records: &[recorder.finish()],
@@ -681,9 +607,8 @@ fn ensure_frame_data(
         let scene_buffer = device.create_buffer(&tgpu::BufferDesc {
             label: Some(tgpu::Label::Name("minimal latest scene info")),
             size: std::mem::size_of::<SceneInfo>(),
-            usage: tgpu::BufferUses::UNIFORM,
-            memory: tgpu::MemoryPreset::Dynamic,
-            host_access: tgpu::HostAccess::WriteSequential,
+            usage: tgpu::BufferUses::UNIFORM | tgpu::BufferUses::COPY_DST,
+            memory: tgpu::MemoryPreset::GpuOnly,
             ..Default::default()
         })?;
         let scene_handle =
@@ -768,12 +693,7 @@ fn create_texture(
 
     recorder.image_transition(
         &texture.image,
-        tgpu::ImageTransition {
-            from: tgpu::ImageLayoutTransition::UNDEFINED,
-            to: tgpu::ImageLayoutTransition::new(tgpu::ImageLayout::TransferDst),
-            aspect: tgpu::ImageAspect::COLOR,
-            ..Default::default()
-        },
+        tgpu::ImageLayoutTransition::new(tgpu::ImageLayout::TransferDst),
     );
     let region = tgpu::BufferImageCopy::image_2d(tgpu::ImageAspect::COLOR, size);
     recorder.copy_buffer_to_image(&tgpu::CopyBufferToImageInfo {
@@ -782,15 +702,7 @@ fn create_texture(
         dst_layout: tgpu::ImageLayout::TransferDst,
         regions: &[region],
     });
-    recorder.image_transition(
-        &texture.image,
-        tgpu::ImageTransition {
-            from: tgpu::ImageLayoutTransition::new(tgpu::ImageLayout::TransferDst),
-            to: tgpu::ImageLayoutTransition::FRAGMENT,
-            aspect: tgpu::ImageAspect::COLOR,
-            ..Default::default()
-        },
-    );
+    recorder.image_transition(&texture.image, tgpu::ImageLayoutTransition::FRAGMENT);
 
     uploads.push(upload);
     Ok(texture)
@@ -900,7 +812,7 @@ fn create_graphics_pipeline(
         depth_write: true,
         depth_compare: tgpu::CompareOp::LessOrEqual,
         descriptor_layouts: &[bindless.layout()],
-        push_constant_size: Some(std::mem::size_of::<PushData>() as u32),
+        push_constant_size: tgpu::push_constant_size::<PushData>(),
         blend: Some(&[tgpu::ColorBlend::Alpha]),
         vertex_input: Some(tgpu::VertexInput {
             buffers: &vertex_bindings,
@@ -918,10 +830,6 @@ fn vertex_input_access() -> tgpu::BufferAccessTransition {
     tgpu::BufferAccessTransition::vertex_input_read()
 }
 
-fn depth_attachment_access() -> tgpu::ImageLayoutTransition {
-    tgpu::ImageLayoutTransition::DEPTH_STENCIL
-}
-
 fn build_ui(
     ctx: &egui::Context,
     texture: egui::TextureId,
@@ -929,26 +837,46 @@ fn build_ui(
     clear_color: &mut [f32; 4],
     v_sync: &mut bool,
     request_swapchain_rebuild: &mut bool,
+    exit_requested: &mut bool,
     viewport_size: &mut tgpu::Extent2D,
     fps: f32,
 ) {
-    egui::SidePanel::left("settings")
+    egui::TopBottomPanel::top("menu_bar").show(ctx, |ui| {
+        egui::MenuBar::new().ui(ui, |ui| {
+            ui.menu_button("File", |ui| {
+                if ui.checkbox(v_sync, "vSync").changed() {
+                    *request_swapchain_rebuild = true;
+                }
+                ui.separator();
+                if ui.button("Exit").clicked() {
+                    *exit_requested = true;
+                    ui.close();
+                }
+            });
+        });
+    });
+
+    egui::SidePanel::left("Settings")
         .default_width(230.0)
         .show(ctx, |ui| {
-            ui.heading("Settings");
-            if ui.checkbox(v_sync, "vSync").changed() {
-                *request_swapchain_rebuild = true;
-            }
-            ui.separator();
             ui.radio_value(image_id, 0, "Image 1");
             ui.radio_value(image_id, 1, "Image 2");
             ui.separator();
-            let mut rgb = [clear_color[0], clear_color[1], clear_color[2]];
+
+            let mut color = egui::Color32::from_rgb(
+                (clear_color[0] * 255.0).round() as u8,
+                (clear_color[1] * 255.0).round() as u8,
+                (clear_color[2] * 255.0).round() as u8,
+            );
             ui.label("Clear Color");
-            if ui.color_edit_button_rgb(&mut rgb).changed() {
-                clear_color[0] = rgb[0];
-                clear_color[1] = rgb[1];
-                clear_color[2] = rgb[2];
+            if egui::color_picker::color_picker_color32(
+                ui,
+                &mut color,
+                egui::color_picker::Alpha::Opaque,
+            ) {
+                clear_color[0] = color.r() as f32 / 255.0;
+                clear_color[1] = color.g() as f32 / 255.0;
+                clear_color[2] = color.b() as f32 / 255.0;
             }
         });
 
@@ -962,7 +890,7 @@ fn build_ui(
         let response = ui.add(egui::Image::new((texture, available)));
         let painter = ui.painter_at(response.rect);
         painter.text(
-            response.rect.left_top() + egui::vec2(8.0, 8.0),
+            response.rect.left_top(),
             egui::Align2::LEFT_TOP,
             format!("FPS: {fps:.1}"),
             egui::FontId::proportional(14.0),
@@ -1027,6 +955,10 @@ impl ApplicationHandler for App {
                 if let Some(render) = &mut self.render {
                     if let Err(err) = render.render_frame() {
                         log::error!("render frame failed: {err}");
+                    }
+                    if render.exit_requested {
+                        event_loop.exit();
+                        return;
                     }
                     render.window.request_redraw();
                 }

@@ -6,7 +6,6 @@ use crate::{Device, Label, raw::RawDevice};
 
 pub enum ShaderSource<'a> {
     Slang(&'a [u8]),
-    Glsl(&'a [u8]),
     Wgsl(&'a str),
     SpirV(&'a [u32]),
 }
@@ -48,16 +47,17 @@ impl Device {
         &self,
         label: Option<Label<'a>>,
         source: ShaderSource<'a>,
-    ) -> Result<Shader, String> {
+    ) -> Result<Shader, crate::GPUError> {
         match source {
             ShaderSource::Slang(code) => {
-                let spirv = compile_slang_from_bytes(code)?;
+                let spirv = compile_slang_from_bytes(code).map_err(crate::GPUError::Shader)?;
                 Ok(self.create_shader_from_spirv(label, &spirv))
             }
-            ShaderSource::Glsl(_code) => unimplemented!(),
             ShaderSource::Wgsl(code) => {
-                let wgsl_shader = WgslShader::new(code)?;
-                let spirv = wgsl_shader.compile().map_err(|e| e.to_string())?;
+                let wgsl_shader = WgslShader::new(code).map_err(crate::GPUError::Shader)?;
+                let spirv = wgsl_shader
+                    .compile()
+                    .map_err(|e| crate::GPUError::Shader(e.to_string()))?;
                 Ok(self.create_shader_from_spirv(label, &spirv))
             }
             ShaderSource::SpirV(spirv) => Ok(self.create_shader_from_spirv(label, spirv)),
@@ -277,26 +277,14 @@ fn fmain(input: VertexOutput) -> @location(0) vec4f {
         let instance = crate::Instance::new(&crate::InstanceCreateInfo {
             app_name: "Triangle",
             engine_name: "Example Engine",
+            display: None,
         })
         .unwrap();
 
-        let adapters = instance.adapters(&[]).unwrap().collect::<Vec<_>>();
+        let adapter = instance.default_adapter().unwrap();
 
-        let adapter = adapters[0].clone();
-
-        let (device, mut queues) = instance
-            .request_device(
-                &crate::DeviceCreateInfo::default(),
-                adapter,
-                &[crate::QueueRequest {
-                    required_flags: crate::QueueFlags::GRAPHICS,
-                    exclude_flags: crate::QueueFlags::empty(),
-                    strict: false,
-                    allow_fallback_share: true,
-                }],
-            )
-            .unwrap();
-
-        (device, queues.next().unwrap())
+        adapter
+            .request_device(&crate::DeviceCreateInfo::default())
+            .unwrap()
     }
 }

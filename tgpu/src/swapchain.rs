@@ -1,11 +1,16 @@
 use ash::vk;
-use raw_window_handle::{RawDisplayHandle, RawWindowHandle};
-use std::sync::Arc;
+use raw_window_handle::{HasDisplayHandle, HasWindowHandle, RawDisplayHandle, RawWindowHandle};
+use std::sync::{Arc, atomic::AtomicI32};
 
 use crate::{
-    Device, Extent2D, Format, GPUError, Image, ImageView, Queue, Semaphore, SurfaceFormat,
+    CommandBuffer, Device, Extent2D, Format, GPUError, Image, ImageLayout, ImageView,
+    PipelineStageFlags, Queue, Semaphore, SubmitInfo, SurfaceFormat,
     raw::{DeviceImpl, ImageImpl, ImageViewImpl, QueueImpl, RawAdapter, RawDevice, SemaphoreImpl},
 };
+
+/// How many CPU frame slots to record ahead of the GPU. Two is enough to keep
+/// the GPU busy while the next frame is recorded, without adding input latency.
+const PREFERRED_FRAMES_IN_FLIGHT: usize = 2;
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
 pub enum PresentMode {
@@ -51,6 +56,71 @@ pub struct Frame {
 
 pub struct Swapchain {
     pub inner: SwapchainImpl,
+    /// Timeline value the queue reached after the last submission for each
+    /// ring slot. `0` means "nothing submitted in this slot yet".
+    frame_values: Vec<u64>,
+    needs_recreate: bool,
+}
+
+/// How to pick a surface format from the ones the surface reports.
+pub enum FormatSelector {
+    /// Prefer sRGB formats, falling back to linear, then to the first entry.
+    SrgbFirst,
+    /// Prefer linear (UNORM) formats, falling back to the first entry.
+    LinearFirst,
+    /// Prefer a specific format, falling back to the first entry.
+    Preferred(Format),
+    /// Anything else.
+    Custom(Box<dyn Fn(&[SurfaceFormat]) -> SurfaceFormat>),
+}
+
+impl Default for FormatSelector {
+    fn default() -> Self {
+        Self::SrgbFirst
+    }
+}
+
+impl FormatSelector {
+    pub fn select(&self, formats: &[SurfaceFormat]) -> SurfaceFormat {
+        if formats.is_empty() {
+            return SurfaceFormat::default();
+        }
+
+        let find = |candidates: &[Format]| {
+            candidates.iter().find_map(|wanted| {
+                formats
+                    .iter()
+                    .find(|candidate| {
+                        candidate.format == *wanted
+                            && candidate.color_space == crate::ColorSpace::SRGB_NONLINEAR
+                    })
+                    .or_else(|| formats.iter().find(|candidate| candidate.format == *wanted))
+                    .copied()
+            })
+        };
+
+        match self {
+            Self::SrgbFirst => find(&[
+                Format::B8G8R8A8_SRGB,
+                Format::R8G8B8A8_SRGB,
+                Format::B8G8R8A8_UNORM,
+                Format::R8G8B8A8_UNORM,
+            ])
+            .unwrap_or(formats[0]),
+            Self::LinearFirst => find(&[
+                Format::B8G8R8A8_UNORM,
+                Format::R8G8B8A8_UNORM,
+                Format::B8G8R8A8_SRGB,
+                Format::R8G8B8A8_SRGB,
+            ])
+            .unwrap_or(formats[0]),
+            Self::Preferred(preferred) => *formats
+                .iter()
+                .find(|candidate| candidate.format == *preferred)
+                .unwrap_or(&formats[0]),
+            Self::Custom(selector) => selector(formats),
+        }
+    }
 }
 
 pub struct SwapchainCreateInfo {
@@ -59,7 +129,23 @@ pub struct SwapchainCreateInfo {
     pub preferred_extent: Extent2D,
     pub preferred_image_count: usize,
     pub preferred_present_mode: PresentMode,
-    pub format_selector: Box<dyn Fn(&[SurfaceFormat]) -> SurfaceFormat>,
+    pub format_selector: FormatSelector,
+}
+
+impl SwapchainCreateInfo {
+    pub fn new(display: RawDisplayHandle, window: RawWindowHandle, extent: Extent2D) -> Self {
+        Self {
+            display,
+            window,
+            preferred_extent: extent,
+            preferred_image_count: 3,
+            // FIFO is the only mode Vulkan guarantees, and the only one that
+            // is vsync'd everywhere. Asking for MAILBOX on a driver that lacks
+            // it lands in IMMEDIATE, which tears.
+            preferred_present_mode: PresentMode::Fifo,
+            format_selector: FormatSelector::default(),
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -86,7 +172,10 @@ pub struct SwapchainImpl {
 
     pub resources: SwapchainImplResources,
 
-    pub max_flight: usize,
+    /// Number of CPU frame slots recorded ahead of the GPU. Capped at the
+    /// swapchain image count; 2 is enough to keep the GPU busy without adding
+    /// input latency.
+    pub frames_in_flight: usize,
     pub preferred_extent: Extent2D,
     pub preferred_image_count: u32,
     pub preferred_present_mode: PresentMode,
@@ -116,7 +205,7 @@ impl SwapchainImpl {
             .into_iter()
             .map(SurfaceFormat::from)
             .collect::<Vec<_>>();
-        let format = (info.format_selector)(&formats);
+        let format = info.format_selector.select(&formats);
         log::info!("format: {:?}", format);
 
         let present_modes = unsafe {
@@ -139,11 +228,13 @@ impl SwapchainImpl {
             info.preferred_image_count as u32,
             info.preferred_present_mode,
             format,
-            None,
         )?;
-        let max_flight = resources.images.len();
+        // Presentation parallelism vs CPU parallelism are separate knobs: the
+        // swapchain may own 3 images while we only keep 2 frames in flight.
+        let frames_in_flight = PREFERRED_FRAMES_IN_FLIGHT.min(resources.images.len());
 
-        let (available, finished) = Self::create_syncs(device.clone(), max_flight);
+        let (available, finished) =
+            Self::create_syncs(device.clone(), frames_in_flight, resources.images.len());
 
         let new = Self {
             device,
@@ -158,7 +249,7 @@ impl SwapchainImpl {
 
             resources,
 
-            max_flight,
+            frames_in_flight,
             preferred_extent: info.preferred_extent,
             preferred_image_count: info.preferred_image_count as u32,
             preferred_present_mode: info.preferred_present_mode,
@@ -170,23 +261,27 @@ impl SwapchainImpl {
         Ok(new)
     }
 
-    fn create_syncs(device: RawDevice, max_flight: usize) -> (Vec<Semaphore>, Vec<Semaphore>) {
-        let mut available = Vec::with_capacity(max_flight);
-        let mut finished = Vec::with_capacity(max_flight);
+    /// `available` (acquire) semaphores are per in-flight slot; `finished`
+    /// (present) semaphores are per *image*, because `vkAcquireNextImageKHR`
+    /// can hand images back out of order.
+    fn create_syncs(
+        device: RawDevice,
+        frames_in_flight: usize,
+        image_count: usize,
+    ) -> (Vec<Semaphore>, Vec<Semaphore>) {
+        let mut available = Vec::with_capacity(frames_in_flight);
+        let mut finished = Vec::with_capacity(image_count);
 
-        for _ in 0..max_flight {
-            let inner_available = unsafe { SemaphoreImpl::new_signal(device.clone()) };
-            let availabe_semaphore = Semaphore {
-                inner: Arc::new(inner_available),
-            };
+        for _ in 0..frames_in_flight {
+            available.push(Semaphore {
+                inner: Arc::new(unsafe { SemaphoreImpl::new_signal(device.clone()) }),
+            });
+        }
 
-            let inner_finished = unsafe { SemaphoreImpl::new_signal(device.clone()) };
-            let finished_semaphore = Semaphore {
-                inner: Arc::new(inner_finished),
-            };
-
-            available.push(availabe_semaphore);
-            finished.push(finished_semaphore);
+        for _ in 0..image_count {
+            finished.push(Semaphore {
+                inner: Arc::new(unsafe { SemaphoreImpl::new_signal(device.clone()) }),
+            });
         }
 
         (available, finished)
@@ -202,7 +297,6 @@ impl SwapchainImpl {
         preferred_image_count: u32,
         preferred_present_mode: PresentMode,
         format: SurfaceFormat,
-        old_swapchain: Option<vk::SwapchainKHR>,
     ) -> Result<SwapchainImplResources, GPUError> {
         let capabilities = unsafe {
             surface_loader
@@ -246,21 +340,40 @@ impl SwapchainImpl {
         let present_mode = if present_modes.contains(&preferred_present_mode) {
             preferred_present_mode
         } else {
-            present_modes
+            // The requested mode carries intent: FIFO/FIFO_RELAXED mean "sync to
+            // vblank", MAILBOX/IMMEDIATE mean "present as fast as possible".
+            // Fall back within the same intent rather than silently switching
+            // vsync on or off.
+            let wants_vsync = matches!(
+                preferred_present_mode,
+                PresentMode::Fifo | PresentMode::FifoRelaxed
+            );
+
+            let preferred_fallbacks: &[PresentMode] = if wants_vsync {
+                &[PresentMode::Fifo, PresentMode::FifoRelaxed]
+            } else {
+                &[PresentMode::Immediate, PresentMode::Mailbox]
+            };
+
+            let fallback = preferred_fallbacks
                 .iter()
                 .copied()
-                .find(|&mode| mode == PresentMode::Mailbox)
+                .find(|mode| present_modes.contains(mode))
                 .or_else(|| {
-                    log::warn!("Present mode: MAILBOX not found, falling back to Immediate");
                     present_modes
                         .iter()
                         .copied()
-                        .find(|&mode| mode == PresentMode::Immediate)
+                        .find(|&mode| mode == PresentMode::Fifo)
                 })
-                .unwrap_or_else(|| {
-                    log::warn!("Present mode: IMMEDIATE not found, falling back to Fifo");
-                    PresentMode::Fifo
-                })
+                .or_else(|| present_modes.first().copied())
+                .unwrap_or(PresentMode::Fifo);
+
+            log::warn!(
+                "Present mode {:?} not supported, falling back to {:?}",
+                preferred_present_mode,
+                fallback
+            );
+            fallback
         };
 
         let info = vk::SwapchainCreateInfoKHR::default()
@@ -275,8 +388,7 @@ impl SwapchainImpl {
             .pre_transform(capabilities.current_transform)
             .composite_alpha(vk::CompositeAlphaFlagsKHR::OPAQUE)
             .present_mode(present_mode.into())
-            .clipped(true)
-            .old_swapchain(old_swapchain.unwrap_or(vk::SwapchainKHR::null()));
+            .clipped(true);
 
         let handle = unsafe {
             loader
@@ -299,6 +411,7 @@ impl SwapchainImpl {
                     handle,
                     device: device.clone(),
                     allocation: None,
+                    current_layout: AtomicI32::new(vk::ImageLayout::UNDEFINED.as_raw()),
                 }),
             })
             .collect::<Vec<_>>();
@@ -434,13 +547,21 @@ impl SwapchainImpl {
             .swapchains(&swapchains)
             .image_indices(&image_indices);
         let result = unsafe { self.loader.queue_present(queue.handle, &present_info) };
+        // SUBOPTIMAL_KHR means "still presentable, but a new swapchain would be
+        // better". Rebuilding on it recreates the swapchain every frame on
+        // drivers that report it persistently (which looks like flicker), so
+        // only OUT_OF_DATE_KHR triggers a rebuild.
         let needs_recreation = match result {
-            Ok(suboptimal) => suboptimal || frame.suboptimal,
+            Ok(_) => false,
             Err(vk::Result::ERROR_OUT_OF_DATE_KHR) => true,
             Err(e) => return Err(GPUError::Vulkan(e)),
         };
 
-        self.frame = (self.frame + 1) % self.max_flight;
+        // The image is in PRESENT_SRC_KHR from here on, whether or not the
+        // caller recorded an explicit transition to it.
+        self.resources.images[frame.index as usize].set_layout(ImageLayout::Present);
+
+        self.frame = (self.frame + 1) % self.frames_in_flight;
         Ok(needs_recreation)
     }
 
@@ -453,7 +574,23 @@ impl SwapchainImpl {
     }
 
     pub fn recreate(&mut self) -> Result<(), GPUError> {
+        log::debug!(
+            "recreating swapchain: {}x{}",
+            self.preferred_extent.width,
+            self.preferred_extent.height
+        );
         unsafe { self.device.wait_idle() };
+
+        // Destroy the old swapchain before creating the new one, and never pass
+        // it as `oldSwapchain`: the image views must die before the images they
+        // point at, and MoltenVK's layer miscarries a swapchain handed back
+        // through `oldSwapchain` (it presents undefined images afterwards).
+        let old_views = std::mem::take(&mut self.resources.views);
+        drop(old_views);
+        unsafe {
+            self.loader.destroy_swapchain(self.resources.handle, None);
+        }
+
         let new = Self::create_resources(
             self.device.clone(),
             &self.loader,
@@ -464,19 +601,16 @@ impl SwapchainImpl {
             self.preferred_image_count,
             self.preferred_present_mode,
             self.format,
-            Some(self.resources.handle),
         )?;
 
-        let (available, finished) = Self::create_syncs(self.device.clone(), new.images.len());
-
-        unsafe {
-            self.loader.destroy_swapchain(self.resources.handle, None);
-        }
+        let frames_in_flight = PREFERRED_FRAMES_IN_FLIGHT.min(new.images.len());
+        let (available, finished) =
+            Self::create_syncs(self.device.clone(), frames_in_flight, new.images.len());
 
         self.resources = new;
         self.available = available;
         self.finished = finished;
-        self.max_flight = self.available.len();
+        self.frames_in_flight = self.available.len();
         self.frame = 0;
         Ok(())
     }
@@ -528,6 +662,68 @@ impl Swapchain {
 
     pub fn recreate(&mut self) -> Result<(), GPUError> {
         self.inner.recreate()?;
+        self.frame_values = vec![0; self.inner.frames_in_flight];
+        self.needs_recreate = false;
+        Ok(())
+    }
+
+    /// Waits for this frame slot's previous submission, then acquires an image.
+    ///
+    /// Recreates the swapchain internally when the surface reports out-of-date,
+    /// so callers only see the happy path. Update the preferred extent on
+    /// window resize and this picks it up.
+    pub fn begin_frame(&mut self, queue: &Queue) -> Result<Frame, GPUError> {
+        if self.needs_recreate {
+            self.recreate()?;
+        }
+
+        for _ in 0..3 {
+            let flight = self.inner.frame;
+            if let Some(&value) = self.frame_values.get(flight)
+                && value != 0
+            {
+                queue.timeline.wait(value, None);
+            }
+
+            let frame = self.inner.acquire_next(None)?;
+            if !frame.out_of_date {
+                return Ok(frame);
+            }
+
+            self.recreate()?;
+        }
+
+        Err(GPUError::Validation(
+            "swapchain could not acquire an image after recreating",
+        ))
+    }
+
+    /// Submits `records`, presents `frame`, and records the timeline value for
+    /// the frame slot.
+    pub fn end_frame(
+        &mut self,
+        queue: &Queue,
+        frame: Frame,
+        records: &[CommandBuffer],
+    ) -> Result<(), GPUError> {
+        let available = self.inner.available_semaphore(frame);
+        let finished = self.inner.finished_semaphore(frame);
+
+        let value = queue.submit(SubmitInfo {
+            records,
+            wait_binary: &[(available, PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT)],
+            signal_binary: &[finished],
+            ..Default::default()
+        });
+
+        if let Some(slot) = self.frame_values.get_mut(frame.flight_index) {
+            *slot = value;
+        }
+
+        if self.inner.present(&queue.inner, frame)? {
+            self.needs_recreate = true;
+        }
+
         Ok(())
     }
 
@@ -563,14 +759,44 @@ impl Swapchain {
 
     #[inline]
     pub fn max_frames_in_flight(&self) -> usize {
-        self.inner.max_flight
+        self.inner.frames_in_flight
     }
 }
 
 impl Device {
+    /// Creates a swapchain for a window, filling in the raw handles for you.
+    ///
+    /// This is the ergonomic Rust entry point. Use
+    /// [`Device::create_swapchain`] when you manage the surface handles
+    /// yourself (or from another language).
+    pub fn create_swapchain_for_window<W>(
+        &self,
+        window: &W,
+        extent: Extent2D,
+    ) -> Result<Swapchain, GPUError>
+    where
+        W: HasWindowHandle + HasDisplayHandle,
+    {
+        let display = window
+            .display_handle()
+            .map_err(|_| GPUError::Validation("window has no display handle"))?
+            .as_raw();
+        let handle = window
+            .window_handle()
+            .map_err(|_| GPUError::Validation("window has no window handle"))?
+            .as_raw();
+
+        self.create_swapchain(&SwapchainCreateInfo::new(display, handle, extent))
+    }
+
     pub fn create_swapchain(&self, info: &SwapchainCreateInfo) -> Result<Swapchain, GPUError> {
         let inner = SwapchainImpl::new(self.inner.clone(), info)?;
-        Ok(Swapchain { inner })
+        let frame_values = vec![0; inner.frames_in_flight];
+        Ok(Swapchain {
+            inner,
+            frame_values,
+            needs_recreate: false,
+        })
     }
 }
 

@@ -314,6 +314,20 @@ impl Viewport {
         }
     }
 
+    /// Builds a viewport covering `rect`. Use this instead of
+    /// [`Viewport::from_extent`] when rendering to a sub-region, since the
+    /// viewport origin is in framebuffer space.
+    pub fn from_rect(rect: Rect) -> Self {
+        Self {
+            x: rect.offset.x as f32,
+            y: rect.offset.y as f32,
+            width: rect.extent.width as f32,
+            height: rect.extent.height as f32,
+            min_depth: 0.0,
+            max_depth: 1.0,
+        }
+    }
+
     pub fn from_extent_y_up(extent: Extent2D) -> Self {
         Self {
             x: 0.0,

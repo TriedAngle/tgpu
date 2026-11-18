@@ -225,6 +225,14 @@ impl BufferAccessTransition {
         )
     }
 
+    /// Reading a uniform buffer from the vertex and fragment stages.
+    pub fn uniform_read() -> Self {
+        Self::new(
+            vk::PipelineStageFlags2::VERTEX_SHADER | vk::PipelineStageFlags2::FRAGMENT_SHADER,
+            vk::AccessFlags2::UNIFORM_READ,
+        )
+    }
+
     pub fn vertex_input_read() -> Self {
         Self::new(
             vk::PipelineStageFlags2::VERTEX_ATTRIBUTE_INPUT,
@@ -347,6 +355,21 @@ impl Device {
 
     pub fn create_buffer_with(&self, desc: &BufferDesc<'_>) -> Result<Buffer, GPUError> {
         self.create_buffer(desc)
+    }
+
+    /// Creates a buffer sized to `data` and writes it in one step.
+    ///
+    /// Any `size` set on `desc` is ignored; the length of `data` wins.
+    pub fn create_buffer_from_slice<T: bytemuck::Pod>(
+        &self,
+        data: &[T],
+        desc: &BufferDesc<'_>,
+    ) -> Result<Buffer, GPUError> {
+        let mut desc = desc.clone();
+        desc.size = std::mem::size_of_val(data);
+        let buffer = self.create_buffer(&desc)?;
+        buffer.write_slice(data);
+        Ok(buffer)
     }
 }
 

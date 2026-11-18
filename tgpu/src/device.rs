@@ -211,8 +211,9 @@ impl DeviceImpl {
         }
 
         let queue_family_infos =
-            QueueImpl::find_queue_families(&instance, &adapter, queue_requests)
-                .expect("Find Queues");
+            QueueImpl::find_queue_families(&instance, &adapter, queue_requests).ok_or(
+                GPUError::Validation("no queue family satisfies the request"),
+            )?;
 
         let mut family_queue_counts: HashMap<u32, u32> = HashMap::new();
         for info in &queue_family_infos {
@@ -359,7 +360,7 @@ impl DeviceImpl {
 }
 
 impl Instance {
-    pub fn request_device(
+    pub fn request_device_with_queues(
         &self,
         info: &DeviceCreateInfo,
         adapter: Adapter,

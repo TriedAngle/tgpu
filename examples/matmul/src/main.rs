@@ -46,22 +46,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let instance = tgpu::Instance::new(&tgpu::InstanceCreateInfo {
         app_name: "Headless MatMul",
         engine_name: "Example Engine",
+        display: None,
     })?;
 
-    let adapters = instance.adapters(&[])?.collect::<Vec<_>>();
-    let adapter = adapters[0].clone();
+    let adapter = instance.default_adapter()?;
 
-    let (device, mut queues) = instance.request_device(
-        &tgpu::DeviceCreateInfo::default(),
-        adapter,
-        &[tgpu::QueueRequest {
-            required_flags: tgpu::QueueFlags::COMPUTE | tgpu::QueueFlags::TRANSFER,
-            exclude_flags: tgpu::QueueFlags::empty(),
-            strict: false,
-            allow_fallback_share: true,
-        }],
-    )?;
-    let queue = queues.next().unwrap();
+    let (device, queue) = adapter.request_device(&tgpu::DeviceCreateInfo::default())?;
 
     let storage_buffer = tgpu::BufferDesc {
         usage: tgpu::BufferUses::STORAGE,
@@ -70,23 +60,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         ..Default::default()
     };
 
-    let buf_a = device.create_buffer(&tgpu::BufferDesc {
-        label: Some(tgpu::Label::Name("A")),
-        size: std::mem::size_of::<f32>() * len_a,
-        ..storage_buffer.clone()
-    })?;
+    let buf_a = device.create_buffer_from_slice(
+        &host_a,
+        &tgpu::BufferDesc {
+            label: Some(tgpu::Label::Name("A")),
+            ..storage_buffer.clone()
+        },
+    )?;
     let buf_b = device.create_buffer(&tgpu::BufferDesc {
         label: Some(tgpu::Label::Name("B")),
-        size: std::mem::size_of::<f32>() * len_b,
         ..storage_buffer.clone()
     })?;
     let buf_c = device.create_buffer(&tgpu::BufferDesc {
         label: Some(tgpu::Label::Name("C")),
-        size: std::mem::size_of::<f32>() * len_c,
         ..storage_buffer
     })?;
-
-    buf_a.write_slice(&host_a);
     buf_b.write_slice(&host_b_t);
 
     let bindless = device.create_bindless_heap(&tgpu::BindlessInfo {
@@ -99,14 +87,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let buf_b_handle = bindless.add_read_buffer(&buf_b);
     let buf_c_handle = bindless.add_rw_buffer(&buf_c);
 
-    let shader = device
-        .create_shader(None, tgpu::ShaderSource::Slang(SHADER.as_bytes()))
-        .expect("MatMul Slang");
+    let shader = device.create_shader(None, tgpu::ShaderSource::Slang(SHADER.as_bytes()))?;
 
     let pipeline = device.create_compute_pipeline(&tgpu::ComputePipelineInfo {
         label: Some(tgpu::Label::Name("MatMul Pipeline")),
         shader: shader.entry("main"),
-        push_constant_size: Some(std::mem::size_of::<Push>() as u32),
+        push_constant_size: tgpu::push_constant_size::<Push>(),
         descriptor_layouts: &[bindless.layout()],
         cache: None,
     });
@@ -124,9 +110,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     let mut rec = queue.record();
-    rec.bind_compute_pipeline(&pipeline);
-    rec.bind_compute_descriptor_set(bindless.descriptor_set(), &pipeline, 0, &[]);
-    rec.push_compute_constants(&pipeline, push);
+    rec.bind_compute(&pipeline, bindless.descriptor_set(), push);
     rec.dispatch(groups_x, groups_y, 1);
 
     queue.submit(tgpu::SubmitInfo {

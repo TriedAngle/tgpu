@@ -2,7 +2,10 @@ use std::{ffi::CStr, fmt, sync::Arc};
 
 use ash::vk;
 
-use crate::{Format, GPUError, raw::InstanceImpl};
+use crate::{
+    Format, GPUError,
+    raw::{InstanceImpl, RawInstance},
+};
 
 #[derive(Debug, Clone)]
 pub struct Adapter {
@@ -147,6 +150,7 @@ pub type RawAdapter = Arc<AdapterImpl>;
 #[derive(Debug)]
 pub struct AdapterImpl {
     pub handle: vk::PhysicalDevice,
+    pub instance: RawInstance,
     pub properties: vk::PhysicalDeviceProperties,
     pub queue_properties: Arc<[vk::QueueFamilyProperties]>,
     pub features: AdapterFeatures,
@@ -155,11 +159,7 @@ pub struct AdapterImpl {
 }
 
 impl AdapterImpl {
-    pub unsafe fn new(
-        instance: &InstanceImpl,
-        pdev: vk::PhysicalDevice,
-        formats: &[Format],
-    ) -> Self {
+    pub unsafe fn new(instance: RawInstance, pdev: vk::PhysicalDevice, formats: &[Format]) -> Self {
         let properties = unsafe { instance.properties(pdev) };
         let features = unsafe { instance.features(pdev) };
         let queue_properties = unsafe { instance.queue_properties(pdev) };
@@ -168,6 +168,7 @@ impl AdapterImpl {
 
         Self {
             handle: pdev,
+            instance,
             properties,
             queue_properties: Arc::from(queue_properties),
             features,
@@ -196,6 +197,44 @@ impl AdapterImpl {
 }
 
 impl Adapter {
+    /// Creates a device with one queue chosen automatically.
+    ///
+    /// Prefers a graphics+compute family, then graphics, compute, transfer, and
+    /// finally any family. Use [`Instance::request_device_with_queues`] when
+    /// you need specific queue families.
+    pub fn request_device(
+        &self,
+        info: &crate::DeviceCreateInfo,
+    ) -> Result<(crate::Device, crate::Queue), GPUError> {
+        use crate::QueueFlags;
+
+        let instance = crate::Instance {
+            inner: self.inner.instance.clone(),
+        };
+
+        let candidates = [
+            crate::QueueRequest::graphics_compute(),
+            crate::QueueRequest::graphics(),
+            crate::QueueRequest::compute(),
+            crate::QueueRequest::transfer(),
+            crate::QueueRequest::new(QueueFlags::empty()),
+        ];
+
+        let mut last_error = None;
+        for request in candidates {
+            match instance.request_device_with_queues(info, self.clone(), &[request]) {
+                Ok((device, mut queues)) => {
+                    if let Some(queue) = queues.next() {
+                        return Ok((device, queue));
+                    }
+                }
+                Err(error) => last_error = Some(error),
+            }
+        }
+
+        Err(last_error.unwrap_or(GPUError::Validation("no suitable queue family found")))
+    }
+
     pub fn features(&self) -> AdapterFeatures {
         self.inner.features
     }
@@ -248,7 +287,10 @@ fn physical_device_name(properties: &vk::PhysicalDeviceProperties) -> String {
 }
 
 impl InstanceImpl {
-    pub unsafe fn adapters(&self, formats: &[Format]) -> Result<Vec<AdapterImpl>, GPUError> {
+    pub unsafe fn adapters(
+        self: &Arc<Self>,
+        formats: &[Format],
+    ) -> Result<Vec<AdapterImpl>, GPUError> {
         let pdevs = unsafe {
             self.handle
                 .enumerate_physical_devices()
@@ -257,7 +299,9 @@ impl InstanceImpl {
 
         let adapters = pdevs
             .into_iter()
-            .map(|physical_device| unsafe { AdapterImpl::new(self, physical_device, formats) })
+            .map(|physical_device| unsafe {
+                AdapterImpl::new(self.clone(), physical_device, formats)
+            })
             .collect::<Vec<_>>();
 
         Ok(adapters)

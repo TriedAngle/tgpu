@@ -1,5 +1,5 @@
 use rand::Rng;
-use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
+use raw_window_handle::HasDisplayHandle;
 
 use winit::{
     application::ApplicationHandler,
@@ -52,6 +52,7 @@ pub struct Render {
     particles: Vec<Particle>,
     particle_buffer: tgpu::Buffer,
     present_image: tgpu::ViewImage,
+    present_extent: tgpu::Extent2D,
     bindless: tgpu::BindlessHeap,
 
     present_pipeline: tgpu::RenderPipeline,
@@ -60,56 +61,26 @@ pub struct Render {
     pc: PushConstants,
 
     frame_count: usize,
-    frame_values: Vec<u64>,
 }
 
 impl Render {
     pub fn new(window: Window) -> Result<Render, tgpu::GPUError> {
         let display = window.display_handle().unwrap().as_raw();
 
-        let instance = tgpu::Instance::new_with_display(
-            &tgpu::InstanceCreateInfo {
-                app_name: "Particles",
-                engine_name: "Example Engine",
-            },
-            display,
-        )?;
+        let instance = tgpu::Instance::new(&tgpu::InstanceCreateInfo {
+            app_name: "Particles",
+            engine_name: "Example Engine",
+            display: Some(display),
+        })?;
 
-        let adapters = instance.adapters(&[])?.collect::<Vec<_>>();
-        let adapter = adapters[0].clone();
+        let adapter = instance.default_adapter()?;
 
-        let (device, mut queues) = instance.request_device(
-            &tgpu::DeviceCreateInfo::default(),
-            adapter,
-            &[tgpu::QueueRequest {
-                required_flags: tgpu::QueueFlags::GRAPHICS,
-                exclude_flags: tgpu::QueueFlags::empty(),
-                strict: false,
-                allow_fallback_share: true,
-            }],
-        )?;
-
-        let queue = queues.next().unwrap();
+        let (device, queue) = adapter.request_device(&tgpu::DeviceCreateInfo::default())?;
 
         let size = window.inner_size();
 
-        let swapchain = device.create_swapchain(&tgpu::SwapchainCreateInfo {
-            display: window.display_handle().unwrap().as_raw(),
-            window: window.window_handle().unwrap().as_raw(),
-            preferred_extent: tgpu::Extent2D::new(size.width, size.height),
-            preferred_image_count: 3,
-            preferred_present_mode: tgpu::PresentMode::Mailbox,
-            format_selector: Box::new(|formats| {
-                formats
-                    .iter()
-                    .find(|f| {
-                        f.format == tgpu::Format::B8G8R8A8_SRGB
-                            && f.color_space == tgpu::ColorSpace::SRGB_NONLINEAR
-                    })
-                    .copied()
-                    .unwrap_or(formats[0])
-            }),
-        })?;
+        let swapchain = device
+            .create_swapchain_for_window(&window, tgpu::Extent2D::new(size.width, size.height))?;
 
         let mut particles = vec![Particle::default(); PARTICLE_COUNT];
 
@@ -129,16 +100,16 @@ impl Render {
             ];
         }
 
-        let particle_buffer = device.create_buffer(&tgpu::BufferDesc {
-            label: Some(tgpu::Label::Name("particle buffer")),
-            size: std::mem::size_of::<Particle>() * PARTICLE_COUNT,
-            usage: tgpu::BufferUses::STORAGE | tgpu::BufferUses::COPY_DST,
-            memory: tgpu::MemoryPreset::Dynamic,
-            host_access: tgpu::HostAccess::ReadWriteRandom,
-            ..Default::default()
-        })?;
-
-        particle_buffer.write_slice(&particles);
+        let particle_buffer = device.create_buffer_from_slice(
+            &particles,
+            &tgpu::BufferDesc {
+                label: Some(tgpu::Label::Name("particle buffer")),
+                usage: tgpu::BufferUses::STORAGE | tgpu::BufferUses::COPY_DST,
+                memory: tgpu::MemoryPreset::Dynamic,
+                host_access: tgpu::HostAccess::ReadWriteRandom,
+                ..Default::default()
+            },
+        )?;
 
         let present_image = device.create_view_image(&tgpu::ViewImageDesc {
             image: tgpu::ImageDesc {
@@ -176,14 +147,12 @@ impl Render {
 
         const SHADER: &str = include_str!("./shader.slang");
 
-        let shader = device
-            .create_shader(None, tgpu::ShaderSource::Slang(SHADER.as_bytes()))
-            .expect("Compute Shader");
+        let shader = device.create_shader(None, tgpu::ShaderSource::Slang(SHADER.as_bytes()))?;
 
         let compute_pipeline = device.create_compute_pipeline(&tgpu::ComputePipelineInfo {
             label: Some(tgpu::Label::Name("Compute Pipeline")),
             shader: shader.entry("computeMain"),
-            push_constant_size: Some(std::mem::size_of::<PushConstants>() as u32),
+            push_constant_size: tgpu::push_constant_size::<PushConstants>(),
             descriptor_layouts: &[bindless.layout()],
             cache: None,
         });
@@ -192,7 +161,7 @@ impl Render {
             label: Some(tgpu::Label::Name("Clear Pipeline")),
             shader: shader.entry("computeClear"),
             descriptor_layouts: &[bindless.layout()],
-            push_constant_size: Some(std::mem::size_of::<PushConstants>() as u32),
+            push_constant_size: tgpu::push_constant_size::<PushConstants>(),
             cache: None,
         });
 
@@ -203,7 +172,7 @@ impl Render {
             color_formats: &[swapchain.format()],
             depth_format: None,
             descriptor_layouts: &[bindless.layout()],
-            push_constant_size: Some(std::mem::size_of::<PushConstants>() as u32),
+            push_constant_size: tgpu::push_constant_size::<PushConstants>(),
             blend_states: None,
             vertex_input_state: None,
             topology: tgpu::PrimitiveTopology::TriangleList,
@@ -223,8 +192,8 @@ impl Render {
             dt: 0.,
             _pad: 0.0,
         };
-        let frame_values = vec![0; swapchain.max_frames_in_flight()];
 
+        let present_extent = swapchain.extent();
         let new = Self {
             window,
             instance,
@@ -233,6 +202,7 @@ impl Render {
             swapchain,
             particles,
             particle_buffer,
+            present_extent,
             present_image,
             bindless,
             present_pipeline,
@@ -240,75 +210,47 @@ impl Render {
             clear_pipeline,
             pc,
             frame_count: 0,
-            frame_values,
         };
 
         Ok(new)
     }
 
     fn render_frame(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        let ring = self.swapchain.flight_index();
-        self.queue.timeline.wait(self.frame_values[ring], None);
-
-        let frame = self.swapchain.acquire_next(None)?;
+        let frame = self.swapchain.begin_frame(&self.queue)?;
         log::trace!("Start Frame {:?}", frame.index);
-        if frame.out_of_date {
-            self.handle_resize();
-            return Ok(());
-        }
+        self.ensure_present_image();
         let mut recorder = self.queue.record();
 
         recorder.image_transition(
             &self.present_image.image,
-            tgpu::ImageTransition {
-                from: tgpu::ImageLayoutTransition::UNDEFINED,
-                to: tgpu::ImageLayoutTransition::COMPUTE,
-                aspect: tgpu::ImageAspect::COLOR,
-                ..Default::default()
-            },
+            tgpu::ImageLayoutTransition::COMPUTE,
         );
 
         let particle_groups = PARTICLE_COUNT.div_ceil(256);
-        recorder.bind_compute_pipeline(&self.compute_pipeline);
-        recorder.bind_compute_descriptor_set(
-            self.bindless.descriptor_set(),
+        recorder.bind_compute(
             &self.compute_pipeline,
-            0,
-            &[],
+            self.bindless.descriptor_set(),
+            self.pc,
         );
-        recorder.push_compute_constants(&self.compute_pipeline, self.pc);
         recorder.dispatch(particle_groups as u32, 1, 1);
 
         let width = self.swapchain.extent().width.div_ceil(16);
         let height = self.swapchain.extent().height.div_ceil(16);
-        recorder.bind_compute_pipeline(&self.clear_pipeline);
-        recorder.bind_compute_descriptor_set(
-            self.bindless.descriptor_set(),
+        recorder.bind_compute(
             &self.clear_pipeline,
-            0,
-            &[],
+            self.bindless.descriptor_set(),
+            self.pc,
         );
-        recorder.push_compute_constants(&self.clear_pipeline, self.pc);
         recorder.dispatch(width, height, 1);
 
         recorder.image_transition(
             &self.present_image.image,
-            tgpu::ImageTransition {
-                from: tgpu::ImageLayoutTransition::COMPUTE,
-                to: tgpu::ImageLayoutTransition::FRAGMENT,
-                aspect: tgpu::ImageAspect::COLOR,
-                ..Default::default()
-            },
+            tgpu::ImageLayoutTransition::FRAGMENT,
         );
 
         recorder.image_transition(
             self.swapchain.image(frame),
-            tgpu::ImageTransition {
-                from: tgpu::ImageLayoutTransition::UNDEFINED,
-                to: tgpu::ImageLayoutTransition::COLOR,
-                aspect: tgpu::ImageAspect::COLOR,
-                ..Default::default()
-            },
+            tgpu::ImageLayoutTransition::COLOR,
         );
 
         let frame_number = self.frame_count as f32;
@@ -322,14 +264,11 @@ impl Render {
             1.0,
         ]);
 
-        recorder.bind_render_pipeline(&self.present_pipeline);
-        recorder.bind_render_descriptor_set(
-            self.bindless.descriptor_set(),
+        recorder.bind_render(
             &self.present_pipeline,
-            0,
-            &[],
+            self.bindless.descriptor_set(),
+            self.pc,
         );
-        recorder.push_render_constants(&self.present_pipeline, self.pc);
 
         recorder.begin_render(
             &tgpu::RenderInfo {
@@ -338,47 +277,17 @@ impl Render {
                 ..Default::default()
             },
             |recorder| {
-                let viewport = tgpu::Viewport::from_extent(self.swapchain.extent());
-                let scissor = tgpu::Rect::from_extent(self.swapchain.extent());
-
-                recorder.viewport(viewport);
-                recorder.scissor(scissor);
-
                 recorder.draw(0..6, 0..1);
             },
         );
 
         recorder.image_transition(
             self.swapchain.image(frame),
-            tgpu::ImageTransition {
-                from: tgpu::ImageLayoutTransition::COLOR,
-                to: tgpu::ImageLayoutTransition::PRESENT,
-                aspect: tgpu::ImageAspect::COLOR,
-                ..Default::default()
-            },
+            tgpu::ImageLayoutTransition::PRESENT,
         );
 
-        let available_semaphore = self.swapchain.available_semaphore(frame);
-        let finished_semaphore = self.swapchain.finished_semaphore(frame);
-
-        let signal_value = self.queue.submit(tgpu::SubmitInfo {
-            records: &[recorder.finish()],
-            wait_binary: &[(
-                available_semaphore,
-                tgpu::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-            )],
-            signal_binary: &[finished_semaphore],
-            ..Default::default()
-        });
-        self.frame_values[ring] = signal_value;
-
-        match self.swapchain.present(&self.queue, frame) {
-            Ok(true) | Err(_) => {
-                self.handle_resize();
-                return Ok(());
-            }
-            _ => {}
-        }
+        self.swapchain
+            .end_frame(&self.queue, frame, &[recorder.finish()])?;
 
         self.frame_count += 1;
 
@@ -387,14 +296,16 @@ impl Render {
         Ok(())
     }
 
-    fn handle_resize(&mut self) {
-        log::debug!("recreate swapchain");
-        let size = self.window.inner_size();
-        self.swapchain
-            .set_preferred_extent(tgpu::Extent2D::new(size.width, size.height));
-        let _ = self.swapchain.recreate();
-        self.frame_values = vec![0; self.swapchain.max_frames_in_flight()];
-        self.pc.window = [size.width, size.height];
+    /// Rebuilds the intermediate image when the swapchain extent changed.
+    /// The swapchain recreates itself inside `begin_frame`.
+    fn ensure_present_image(&mut self) {
+        let extent = self.swapchain.extent();
+        if self.present_extent == extent {
+            return;
+        }
+        log::debug!("rebuild present image: {extent:?}");
+        self.present_extent = extent;
+        self.pc.window = [extent.width, extent.height];
 
         let present_image = self
             .device

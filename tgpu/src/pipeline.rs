@@ -282,6 +282,12 @@ impl ColorBlend {
     }
 }
 
+/// Push constant byte size for a POD type, for use as
+/// `push_constant_size: tgpu::push_constant_size::<PushData>()`.
+pub const fn push_constant_size<T>() -> Option<u32> {
+    Some(std::mem::size_of::<T>() as u32)
+}
+
 pub struct ComputePipelineInfo<'a> {
     pub shader: ShaderEntry<'a>,
     pub descriptor_layouts: &'a [&'a DescriptorSetLayout],
@@ -536,6 +542,13 @@ impl RenderPipelineImpl {
 
 impl ComputePipelineImpl {
     pub fn new(device: Arc<DeviceImpl>, info: &ComputePipelineInfo<'_>) -> ComputePipelineImpl {
+        Self::try_new(device, info).expect("Create compute pipeline")
+    }
+
+    pub fn try_new(
+        device: Arc<DeviceImpl>,
+        info: &ComputePipelineInfo<'_>,
+    ) -> Result<ComputePipelineImpl, crate::GPUError> {
         let mut push_constant_ranges = Vec::new();
         if let Some(size) = info.push_constant_size {
             push_constant_ranges.push(
@@ -581,18 +594,18 @@ impl ComputePipelineImpl {
             device
                 .handle
                 .create_compute_pipelines(cache, &[create_info], None)
-                .unwrap()[0]
+                .map_err(|(_, err)| crate::GPUError::from(err))?[0]
         };
 
         if let Some(label) = &info.label {
             unsafe { device.attach_label(handle, label) };
         }
 
-        ComputePipelineImpl {
+        Ok(ComputePipelineImpl {
             handle,
             layout,
             device,
-        }
+        })
     }
 }
 
@@ -610,9 +623,17 @@ impl Device {
             .expect("Create render pipeline")
     }
 
+    pub fn try_create_compute_pipeline(
+        &self,
+        info: &ComputePipelineInfo<'_>,
+    ) -> Result<ComputePipeline, crate::GPUError> {
+        let inner = ComputePipelineImpl::try_new(self.inner.clone(), info)?;
+        Ok(ComputePipeline { inner })
+    }
+
     pub fn create_compute_pipeline(&self, info: &ComputePipelineInfo<'_>) -> ComputePipeline {
-        let inner = ComputePipelineImpl::new(self.inner.clone(), info);
-        ComputePipeline { inner }
+        self.try_create_compute_pipeline(info)
+            .expect("Create compute pipeline")
     }
 }
 

@@ -1,17 +1,22 @@
 use ash::vk;
 use parking_lot::Mutex;
 use std::{
-    cell::{Cell, RefCell, UnsafeCell},
+    cell::UnsafeCell,
     collections::HashMap,
     ops,
     rc::Rc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     thread::{self, ThreadId},
 };
 
 use crate::{
     BlitImageInfo, Buffer, BufferTransition, ComputePipeline, CopyBufferInfo,
     CopyBufferToImageInfo, CopyImageInfo, DescriptorSet, GPUError, Image, ImageLayout,
-    ImageTransition, ImageView, Queue, Rect, RenderPipeline, Semaphore, Viewport,
+    ImageLayoutTransition, ImageTransition, ImageView, Queue, Rect, RenderPipeline, Semaphore,
+    Viewport,
     raw::{ComputePipelineImpl, QueueImpl, RawDevice, RenderPipelineImpl},
 };
 
@@ -66,18 +71,15 @@ impl From<vk::PipelineStageFlags> for PipelineStageFlags {
 #[derive(Debug)]
 pub struct CommandPools {
     pub device: RawDevice,
-    pub pools: Mutex<HashMap<ThreadId, Rc<ThreadCommandPool>>>,
+    pub pools: Mutex<HashMap<ThreadId, Arc<ThreadCommandPool>>>,
 }
-
-unsafe impl Send for CommandPools {}
-unsafe impl Sync for CommandPools {}
 
 #[derive(Debug)]
 pub struct ThreadCommandPool {
     pub handle: vk::CommandPool,
     pub device: RawDevice,
-    pub ready: RefCell<Vec<CommandBufferImpl>>,
-    pub dropped: RefCell<Vec<DroppedCommandBuffer>>,
+    pub ready: Mutex<Vec<CommandBufferImpl>>,
+    pub dropped: Mutex<Vec<DroppedCommandBuffer>>,
 }
 
 #[derive(Debug)]
@@ -85,10 +87,16 @@ pub struct CommandBuffer {
     pub inner: CommandBufferImpl,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct CommandBufferImpl {
     pub handle: vk::CommandBuffer,
-    pub submission: Rc<Cell<u64>>,
+    pub submission: Arc<AtomicU64>,
+}
+
+impl PartialEq for CommandBufferImpl {
+    fn eq(&self, other: &Self) -> bool {
+        self.handle == other.handle
+    }
 }
 
 #[derive(Debug, Copy, Clone)]
@@ -105,7 +113,7 @@ pub struct CommandRecorder {
 #[derive(Debug, Clone)]
 pub struct CommandRecorderImpl {
     pub buffer: CommandBufferImpl,
-    pub pool: Rc<ThreadCommandPool>,
+    pub pool: Arc<ThreadCommandPool>,
     pub device: RawDevice,
 }
 
@@ -298,14 +306,34 @@ impl CommandRecorder {
         CommandBuffer { inner: buffer }
     }
 
-    pub fn image_transition(&mut self, image: &Image, transition: ImageTransition) {
+    pub fn image_transition<'a>(
+        &mut self,
+        image: &Image,
+        transition: impl Into<ImageTransition<'a>>,
+    ) {
         let inner = unsafe { &mut *self.inner.get() };
-        unsafe { inner.image_transition(image.inner.handle, transition) };
+        unsafe { inner.image_transition(image, transition.into()) };
     }
 
     pub fn buffer_transition(&mut self, buffer: &Buffer, transition: BufferTransition) {
         let inner = unsafe { &mut *self.inner.get() };
         unsafe { inner.buffer_transition(buffer.inner.handle, transition) };
+    }
+
+    /// Copies `data` into `buffer` from the GPU.
+    ///
+    /// Unlike a host-mapped write, the copy is recorded into the command stream,
+    /// so it needs no mapping, no flush, and is ordered against the surrounding
+    /// commands. Requires `BufferUses::COPY_DST` on the buffer, and a barrier
+    /// from `TRANSFER_DST` before the shader reads it.
+    pub fn update_buffer(&mut self, buffer: &Buffer, offset: vk::DeviceSize, data: &[u8]) {
+        let inner = unsafe { &mut *self.inner.get() };
+        unsafe { inner.update_buffer(buffer, offset, data) };
+    }
+
+    /// [`CommandRecorder::update_buffer`] for a POD slice.
+    pub fn update_buffer_slice<T: bytemuck::Pod>(&mut self, buffer: &Buffer, data: &[T]) {
+        self.update_buffer(buffer, 0, bytemuck::cast_slice(data));
     }
 
     pub fn bind_render_pipeline(&mut self, pipeline: &RenderPipeline) {
@@ -376,6 +404,19 @@ impl CommandRecorder {
         }
     }
 
+    /// Binds a compute pipeline, its bindless set at binding 0, and its push
+    /// constants in one call.
+    pub fn bind_compute<T: bytemuck::Pod>(
+        &mut self,
+        pipeline: &ComputePipeline,
+        set: &DescriptorSet,
+        push_constants: T,
+    ) {
+        self.bind_compute_pipeline(pipeline);
+        self.bind_compute_descriptor_set(set, pipeline, 0, &[]);
+        self.push_compute_constants(pipeline, push_constants);
+    }
+
     pub fn bind_render_descriptor_set(
         &self,
         set: &DescriptorSet,
@@ -394,6 +435,19 @@ impl CommandRecorder {
         unsafe {
             inner.push_render_constants(&pipeline.inner, pc);
         }
+    }
+
+    /// Binds a render pipeline, its bindless set at binding 0, and its push
+    /// constants in one call.
+    pub fn bind_render<T: bytemuck::Pod>(
+        &mut self,
+        pipeline: &RenderPipeline,
+        set: &DescriptorSet,
+        push_constants: T,
+    ) {
+        self.bind_render_pipeline(pipeline);
+        self.bind_render_descriptor_set(set, pipeline, 0, &[]);
+        self.push_render_constants(pipeline, push_constants);
     }
 
     pub fn dispatch(&mut self, x: u32, y: u32, z: u32) {
@@ -428,9 +482,13 @@ impl<'a> RenderRecorder<'a> {
         unsafe { inner.draw_indexed(index, vertex_offset, instance) };
     }
 
-    pub fn image_transition(&mut self, image: &Image, transition: ImageTransition) {
+    pub fn image_transition<'t>(
+        &mut self,
+        image: &Image,
+        transition: impl Into<ImageTransition<'t>>,
+    ) {
         let inner = unsafe { &mut *self.command_recorder.inner.get() };
-        unsafe { inner.image_transition(image.inner.handle, transition) };
+        unsafe { inner.image_transition(image, transition.into()) };
     }
 
     pub fn bind_render_pipeline(&mut self, pipeline: &RenderPipeline) {
@@ -457,6 +515,19 @@ impl<'a> RenderRecorder<'a> {
         unsafe {
             inner.push_render_constants(&pipeline.inner, pc);
         }
+    }
+
+    /// Binds a render pipeline, its bindless set at binding 0, and its push
+    /// constants in one call.
+    pub fn bind_render<T: bytemuck::Pod>(
+        &mut self,
+        pipeline: &RenderPipeline,
+        set: &DescriptorSet,
+        push_constants: T,
+    ) {
+        self.bind_render_pipeline(pipeline);
+        self.bind_render_descriptor_set(set, pipeline, 0, &[]);
+        self.push_render_constants(pipeline, push_constants);
     }
 
     pub fn bind_vertex_buffer(&mut self, slot: u32, buffer: &Buffer, offset: vk::DeviceSize) {
@@ -557,6 +628,14 @@ impl CommandRecorderImpl {
                 .dynamic
                 .cmd_begin_rendering(self.buffer.handle, &rendering_info);
         }
+
+        // Viewport and scissor are dynamic state and default to the render
+        // area, which is what callers want in every case but sub-region
+        // overrides. Both can still be set explicitly between draws.
+        unsafe {
+            self.viewport(Viewport::from_rect(info.area));
+            self.scissor(info.area);
+        }
     }
 
     pub unsafe fn end_rendering(&self) {
@@ -625,15 +704,18 @@ impl CommandRecorderImpl {
         }
     }
 
-    pub unsafe fn image_transition(&self, image: vk::Image, transition: ImageTransition) {
-        let old_layout = transition.from.layout.into();
-        let (src_stage, src_access) = (transition.from.stage, transition.from.access);
+    pub unsafe fn image_transition(&self, image: &Image, transition: ImageTransition<'_>) {
+        let from = ImageLayoutTransition::new(image.layout());
+        let aspect = crate::image::infer_aspect_from_format(image.format);
+
+        let old_layout = from.layout.into();
+        let (src_stage, src_access) = (from.stage, from.access);
 
         let new_layout = transition.to.layout.into();
         let (dst_stage, dst_access) = (transition.to.stage, transition.to.access);
 
         let mut barrier = vk::ImageMemoryBarrier2::default()
-            .image(image)
+            .image(image.inner.handle)
             .old_layout(old_layout)
             .src_stage_mask(src_stage)
             .src_access_mask(src_access)
@@ -642,7 +724,7 @@ impl CommandRecorderImpl {
             .dst_access_mask(dst_access)
             .subresource_range(
                 vk::ImageSubresourceRange::default()
-                    .aspect_mask(transition.aspect.into())
+                    .aspect_mask(aspect.into())
                     .base_mip_level(transition.mips.start)
                     .level_count(transition.mips.len() as u32)
                     .base_array_layer(transition.layers.start)
@@ -664,6 +746,34 @@ impl CommandRecorderImpl {
                 .ext
                 .sync2
                 .cmd_pipeline_barrier2(self.buffer.handle, &dependency_info);
+        }
+
+        image.set_layout(transition.to.layout);
+    }
+
+    pub unsafe fn update_buffer(&self, buffer: &Buffer, offset: vk::DeviceSize, data: &[u8]) {
+        assert_eq!(
+            offset % 4,
+            0,
+            "vkCmdUpdateBuffer offset must be 4-byte aligned"
+        );
+        assert_eq!(
+            data.len() % 4,
+            0,
+            "vkCmdUpdateBuffer size must be 4-byte aligned"
+        );
+        assert!(
+            data.len() <= 65536,
+            "vkCmdUpdateBuffer is limited to 65536 bytes"
+        );
+
+        unsafe {
+            self.device.handle.cmd_update_buffer(
+                self.buffer.handle,
+                buffer.inner.handle,
+                offset,
+                data,
+            );
         }
     }
 
@@ -937,6 +1047,11 @@ impl Queue {
         let tid = thread::current().id();
         let pool = self.pools.get(tid, &self.inner);
 
+        // Sweep completed buffers for *this* thread's pool. Doing it here
+        // rather than in `submit` means the pool is always owned by the
+        // current thread, which is what makes cross-thread submission safe.
+        pool.try_cleanup(self.timeline.get());
+
         let buffer = pool.get();
 
         unsafe {
@@ -965,7 +1080,6 @@ impl Queue {
             .submission_counter
             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let timeline = self.timeline.clone();
-        let pools = &self.pools;
 
         let command_buffers = info
             .records
@@ -1001,7 +1115,6 @@ impl Queue {
             .submit(
                 submission_index,
                 timeline,
-                pools,
                 &command_buffers,
                 &wait_binary,
                 &wait_timeline,
@@ -1017,21 +1130,16 @@ impl QueueImpl {
         &self,
         submission_index: u64,
         timeline: Semaphore,
-        pools: &CommandPools,
         command_buffers: &[CommandBufferImpl],
         wait_binary: &[(vk::Semaphore, vk::PipelineStageFlags)],
         wait_timeline: &[(vk::Semaphore, u64, vk::PipelineStageFlags)],
         signal_binary: &[vk::Semaphore],
         signal_timeline: &[(vk::Semaphore, u64)],
     ) -> Result<u64, GPUError> {
-        let timeline_index = timeline.get();
-
-        pools.try_cleanup(timeline_index);
-
         let submit_buffers = command_buffers
             .iter()
             .map(|b| {
-                b.submission.set(submission_index);
+                b.submission.store(submission_index, Ordering::Relaxed);
                 b.handle
             })
             .collect::<Vec<_>>();
@@ -1096,7 +1204,7 @@ impl CommandPools {
             pools: Mutex::new(HashMap::new()),
         }
     }
-    fn get(&self, tid: thread::ThreadId, queue: &QueueImpl) -> Rc<ThreadCommandPool> {
+    fn get(&self, tid: thread::ThreadId, queue: &QueueImpl) -> Arc<ThreadCommandPool> {
         let mut pools = self.pools.lock();
         if let Some(pool) = pools.get(&tid) {
             return pool.clone();
@@ -1106,28 +1214,19 @@ impl CommandPools {
         let pool = ThreadCommandPool {
             handle,
             device: self.device.clone(),
-            ready: RefCell::new(Vec::new()),
-            dropped: RefCell::new(Vec::new()),
+            ready: Mutex::new(Vec::new()),
+            dropped: Mutex::new(Vec::new()),
         };
 
-        let pool = Rc::new(pool);
+        let pool = Arc::new(pool);
         pools.insert(tid, pool.clone());
         pool
-    }
-
-    pub fn try_cleanup(&self, completed_index: u64) {
-        let pools = self.pools.lock();
-
-        let thread_id = thread::current().id();
-        let pool = pools.get(&thread_id).unwrap();
-
-        pool.try_cleanup(completed_index);
     }
 }
 
 impl ThreadCommandPool {
     pub fn get(&self) -> CommandBufferImpl {
-        let mut ready = self.ready.borrow_mut();
+        let mut ready = self.ready.lock();
         if let Some(buffer) = ready.pop() {
             return buffer;
         }
@@ -1143,7 +1242,7 @@ impl ThreadCommandPool {
             .into_iter()
             .map(|buffer| CommandBufferImpl {
                 handle: buffer,
-                submission: Rc::new(Cell::new(0)),
+                submission: Arc::new(AtomicU64::new(0)),
             })
             .collect::<Vec<_>>();
 
@@ -1155,12 +1254,11 @@ impl ThreadCommandPool {
     }
 
     pub fn retire(&self, buffer: DroppedCommandBuffer) {
-        let mut dropped = self.dropped.borrow_mut();
-        dropped.push(buffer);
+        self.dropped.lock().push(buffer);
     }
 
     pub fn try_cleanup(&self, completed_index: u64) {
-        let mut retired = self.dropped.borrow_mut();
+        let mut retired = self.dropped.lock();
 
         let freeable = {
             let mut freeable = Vec::new();
@@ -1176,7 +1274,7 @@ impl ThreadCommandPool {
         };
 
         if !freeable.is_empty() {
-            let mut ready = self.ready.borrow_mut();
+            let mut ready = self.ready.lock();
             if ready.len() < 10 {
                 let new_ready_buffers = freeable.into_iter().map(|b| {
                     unsafe {
@@ -1187,7 +1285,7 @@ impl ThreadCommandPool {
                     }
                     CommandBufferImpl {
                         handle: b,
-                        submission: Rc::new(Cell::new(0)),
+                        submission: Arc::new(AtomicU64::new(0)),
                     }
                 });
                 ready.extend(new_ready_buffers);
@@ -1206,34 +1304,32 @@ impl Drop for CommandRecorderImpl {
     fn drop(&mut self) {
         let buffer = DroppedCommandBuffer {
             handle: self.buffer.handle,
-            submission: self.buffer.submission.get(),
+            submission: self.buffer.submission.load(Ordering::Relaxed),
         };
         self.pool.retire(buffer);
     }
 }
 
-impl Drop for CommandPools {
+impl Drop for ThreadCommandPool {
     fn drop(&mut self) {
-        for pool in self.pools.get_mut().values_mut() {
-            unsafe { self.device.wait_idle() };
+        unsafe { self.device.wait_idle() };
 
-            let ready = pool.ready.borrow();
-            let ready = ready.iter().map(|b| b.handle).collect::<Vec<_>>();
+        let ready = self.ready.lock();
+        let ready = ready.iter().map(|b| b.handle).collect::<Vec<_>>();
 
-            let dropped = pool.dropped.borrow();
-            let dropped = dropped.iter().map(|b| b.handle).collect::<Vec<_>>();
+        let dropped = self.dropped.lock();
+        let dropped = dropped.iter().map(|b| b.handle).collect::<Vec<_>>();
 
-            unsafe {
-                if !ready.is_empty() {
-                    self.device.handle.free_command_buffers(pool.handle, &ready);
-                }
-                if !dropped.is_empty() {
-                    self.device
-                        .handle
-                        .free_command_buffers(pool.handle, &dropped);
-                }
-                self.device.handle.destroy_command_pool(pool.handle, None);
+        unsafe {
+            if !ready.is_empty() {
+                self.device.handle.free_command_buffers(self.handle, &ready);
             }
+            if !dropped.is_empty() {
+                self.device
+                    .handle
+                    .free_command_buffers(self.handle, &dropped);
+            }
+            self.device.handle.destroy_command_pool(self.handle, None);
         }
     }
 }

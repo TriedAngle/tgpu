@@ -1,5 +1,12 @@
-export VULKAN_SDK=$HOME/VulkanSDK/1.4.313.1/macOS
-export DYLD_FALLBACK_LIBRARY_PATH=$VULKAN_SDK/lib
-export VK_ICD_FILENAMES=$VULKAN_SDK/share/vulkan/icd.d/MoltenVK_icd.json
-export VK_LAYER_PATH=$VULKAN_SDK/share/vulkan/explicit_layer.d
-
+# Source this to point the Vulkan loader at the newest installed LunarG SDK on macOS.
+#
+# Picking the *newest* SDK matters: older SDKs bundle old MoltenVK. On this
+# machine 1.4.309/1.4.313 ship MoltenVK with ICD api_version 1.2.0, while
+# 1.4.341 ships MoltenVK 1.4 (api_version 1.4.0) plus KosmicKrisp.
+SDK_ROOT="${VULKAN_SDK_ROOT:-$HOME/VulkanSDK}"
+VULKAN_SDK="$(ls -d "$SDK_ROOT"/*/macOS 2>/dev/null | sort -V | tail -1)"
+export VULKAN_SDK
+export DYLD_FALLBACK_LIBRARY_PATH="$VULKAN_SDK/lib"
+export VK_ICD_FILENAMES="$VULKAN_SDK/share/vulkan/icd.d/MoltenVK_icd.json"
+export VK_LAYER_PATH="$VULKAN_SDK/share/vulkan/explicit_layer.d"
+echo "Vulkan SDK: $VULKAN_SDK ($(python3 -c "import json;print(json.load(open('$VK_ICD_FILENAMES'))['ICD']['api_version'])") ICD)" >&2

@@ -1,4 +1,4 @@
-use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
+use raw_window_handle::HasDisplayHandle;
 
 use winit::{
     application::ApplicationHandler,
@@ -50,38 +50,21 @@ pub struct Render {
     buffer: tgpu::Buffer,
     pipeline: tgpu::RenderPipeline,
     frame_count: usize,
-    frame_values: Vec<u64>,
 }
 
 impl Render {
     pub fn new(window: Window) -> Result<Render, tgpu::GPUError> {
         let display = window.display_handle().unwrap().as_raw();
 
-        let instance = tgpu::Instance::new_with_display(
-            &tgpu::InstanceCreateInfo {
-                app_name: "Triangle",
-                engine_name: "Example Engine",
-            },
-            display,
-        )?;
+        let instance = tgpu::Instance::new(&tgpu::InstanceCreateInfo {
+            app_name: "Triangle",
+            engine_name: "Example Engine",
+            display: Some(display),
+        })?;
 
-        let adapters = instance.adapters(&[])?.collect::<Vec<_>>();
-        // println!("adapters: {:#?}", adapters);
+        let adapter = instance.default_adapter()?;
 
-        let adapter = adapters[0].clone();
-
-        let (device, mut queues) = instance.request_device(
-            &tgpu::DeviceCreateInfo::default(),
-            adapter,
-            &[tgpu::QueueRequest {
-                required_flags: tgpu::QueueFlags::GRAPHICS,
-                exclude_flags: tgpu::QueueFlags::empty(),
-                strict: false,
-                allow_fallback_share: true,
-            }],
-        )?;
-
-        let queue = queues.next().unwrap();
+        let (device, queue) = adapter.request_device(&tgpu::DeviceCreateInfo::default())?;
 
         let size = window.inner_size();
 
@@ -95,30 +78,13 @@ impl Render {
             ..Default::default()
         })?;
 
-        let swapchain = device.create_swapchain(&tgpu::SwapchainCreateInfo {
-            display: window.display_handle().unwrap().as_raw(),
-            window: window.window_handle().unwrap().as_raw(),
-            preferred_extent: tgpu::Extent2D::new(size.width, size.height),
-            preferred_image_count: 3,
-            preferred_present_mode: tgpu::PresentMode::Mailbox,
-            format_selector: Box::new(|formats| {
-                formats
-                    .iter()
-                    .find(|f| {
-                        f.format == tgpu::Format::B8G8R8A8_SRGB
-                            && f.color_space == tgpu::ColorSpace::SRGB_NONLINEAR
-                    })
-                    .copied()
-                    .unwrap_or(formats[0])
-            }),
-        })?;
+        let swapchain = device
+            .create_swapchain_for_window(&window, tgpu::Extent2D::new(size.width, size.height))?;
 
-        let shader = device
-            .create_shader(
-                Some(tgpu::Label::Name("shader")),
-                tgpu::ShaderSource::Slang(TRIANGLE_SHADER_SLANG.as_bytes()),
-            )
-            .expect("Shader");
+        let shader = device.create_shader(
+            Some(tgpu::Label::Name("shader")),
+            tgpu::ShaderSource::Slang(TRIANGLE_SHADER_SLANG.as_bytes()),
+        )?;
 
         let pipeline = device.create_render_pipeline(&tgpu::RenderPipelineInfo {
             label: Some(tgpu::Label::Name("Present Pipeline")),
@@ -131,7 +97,6 @@ impl Render {
             color_formats: &[swapchain.format()],
             ..Default::default()
         });
-        let frame_values = vec![0; swapchain.max_frames_in_flight()];
 
         let new = Self {
             window,
@@ -142,37 +107,19 @@ impl Render {
             buffer,
             pipeline,
             frame_count: 0,
-            frame_values,
         };
 
         Ok(new)
     }
 
     fn render_frame(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        let ring = self.swapchain.flight_index();
-        self.queue.timeline.wait(self.frame_values[ring], None);
-
-        let frame = self.swapchain.acquire_next(None)?;
+        let frame = self.swapchain.begin_frame(&self.queue)?;
         log::trace!("Start Frame {:?}", frame.index);
-        if frame.out_of_date {
-            log::debug!("recreate swapchain");
-            let size = self.window.inner_size();
-            self.swapchain
-                .set_preferred_extent(tgpu::Extent2D::new(size.width, size.height));
-            let _ = self.swapchain.recreate();
-            self.frame_values = vec![0; self.swapchain.max_frames_in_flight()];
-            return Ok(());
-        }
         let mut recorder = self.queue.record();
 
         recorder.image_transition(
             self.swapchain.image(frame),
-            tgpu::ImageTransition {
-                from: tgpu::ImageLayoutTransition::UNDEFINED,
-                to: tgpu::ImageLayoutTransition::COLOR,
-                aspect: tgpu::ImageAspect::COLOR,
-                ..Default::default()
-            },
+            tgpu::ImageLayoutTransition::COLOR,
         );
 
         let frame_number = self.frame_count as f32;
@@ -196,52 +143,17 @@ impl Render {
                 ..Default::default()
             },
             |recorder| {
-                let viewport = tgpu::Viewport::from_extent(self.swapchain.extent());
-                let scissor = tgpu::Rect::from_extent(self.swapchain.extent());
-
-                recorder.viewport(viewport);
-                recorder.scissor(scissor);
-
                 recorder.draw(0..3, 0..1);
             },
         );
 
         recorder.image_transition(
             self.swapchain.image(frame),
-            tgpu::ImageTransition {
-                from: tgpu::ImageLayoutTransition::COLOR,
-                to: tgpu::ImageLayoutTransition::PRESENT,
-                aspect: tgpu::ImageAspect::COLOR,
-                ..Default::default()
-            },
+            tgpu::ImageLayoutTransition::PRESENT,
         );
 
-        let available_semaphore = self.swapchain.available_semaphore(frame);
-        let finished_semaphore = self.swapchain.finished_semaphore(frame);
-
-        let signal_value = self.queue.submit(tgpu::SubmitInfo {
-            records: &[recorder.finish()],
-            wait_binary: &[(
-                available_semaphore,
-                tgpu::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-            )],
-            signal_binary: &[finished_semaphore],
-            ..Default::default()
-        });
-        self.frame_values[ring] = signal_value;
-
-        match self.swapchain.present(&self.queue, frame) {
-            Ok(true) | Err(_) => {
-                log::debug!("recreate swapchain");
-                let size = self.window.inner_size();
-                self.swapchain
-                    .set_preferred_extent(tgpu::Extent2D::new(size.width, size.height));
-                let _ = self.swapchain.recreate();
-                self.frame_values = vec![0; self.swapchain.max_frames_in_flight()];
-                return Ok(());
-            }
-            _ => {}
-        }
+        self.swapchain
+            .end_frame(&self.queue, frame, &[recorder.finish()])?;
 
         self.frame_count += 1;
 

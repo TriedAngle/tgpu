@@ -72,9 +72,12 @@ void computeMain(uint3 thread_id : SV_DispatchThreadID) {
     float sin_angle = sin(angle);
 
     float3 position = vertex.position;
+    // Rotated by -angle, matching the reference sample's GLSL matrix (its
+    // `mat3(...)` constructor is column-major, so the same literals rotate the
+    // other way than a row-major `float3x3` would).
     vertex.position = float3(
-        cos_angle * position.x - sin_angle * position.y,
-        sin_angle * position.x + cos_angle * position.y,
+        cos_angle * position.x + sin_angle * position.y,
+        -sin_angle * position.x + cos_angle * position.y,
         position.z
     );
 

@@ -10,10 +10,10 @@ use crate::{
     CullMode, DescriptorBinding, DescriptorPool, DescriptorPoolInfo, DescriptorSet,
     DescriptorSetLayout, DescriptorSetLayoutInfo, DescriptorType, DescriptorWrite, Device,
     Extent2D, Extent3D, Filter, Format, FrontFace, GPUError, HostAccess, ImageAspect, ImageDesc,
-    ImageLayout, ImageLayoutTransition, ImageSubresourceLayers, ImageTransition, ImageUses, Label,
-    MemoryPreset, Offset3D, PolygonMode, PrimitiveTopology, Rect, RenderPipeline,
-    RenderPipelineInfo, RenderRecorder, SamplerAddressMode, SamplerCreateInfo, SamplerMipmapMode,
-    ShaderSource, ShaderStageFlags, Swapchain, ViewImage, ViewImageDesc, Viewport,
+    ImageLayout, ImageLayoutTransition, ImageSubresourceLayers, ImageUses, Label, MemoryPreset,
+    Offset3D, PolygonMode, PrimitiveTopology, Rect, RenderPipeline, RenderPipelineInfo,
+    RenderRecorder, SamplerAddressMode, SamplerCreateInfo, SamplerMipmapMode, ShaderSource,
+    ShaderStageFlags, Swapchain, ViewImage, ViewImageDesc, Viewport,
 };
 
 pub use ::egui;
@@ -144,7 +144,6 @@ struct TextureBinding {
     descriptor_set: DescriptorSet,
     extent: Extent3D,
     kind: TextureKind,
-    initialized: bool,
     options: Option<epaint::textures::TextureOptions>,
 }
 
@@ -260,9 +259,7 @@ impl Renderer {
             ..Default::default()
         });
 
-        let shader = device
-            .create_shader(info.label.clone(), ShaderSource::Wgsl(SHADER_WGSL))
-            .map_err(Error::Shader)?;
+        let shader = device.create_shader(info.label.clone(), ShaderSource::Wgsl(SHADER_WGSL))?;
 
         let vertex_binding = [vk::VertexInputBindingDescription::default()
             .binding(0)
@@ -497,7 +494,6 @@ impl Renderer {
                 descriptor_set,
                 extent: extent.to_3d(1),
                 kind: TextureKind::External,
-                initialized: true,
                 options: None,
             },
         );
@@ -623,7 +619,6 @@ impl Renderer {
             descriptor_set,
             extent,
             kind: TextureKind::Managed,
-            initialized: false,
             options: Some(options),
         })
     }
@@ -777,30 +772,17 @@ impl Frame<'_> {
 
     pub fn record_uploads(&mut self, cmd: &mut CommandRecorder) {
         let uploads = &self.renderer.frames[self.flight_index].uploads;
-        let mut upload_state = HashMap::<TextureId, bool>::new();
 
         for upload in uploads {
             let Some(texture) = self.renderer.textures.get(&upload.texture_id) else {
                 continue;
             };
 
-            let from = upload_state
-                .get(&upload.texture_id)
-                .copied()
-                .unwrap_or(texture.initialized);
-
+            // The tracked layout handles both the first upload (UNDEFINED) and
+            // every subsequent one (FRAGMENT).
             cmd.image_transition(
                 &texture.image.image,
-                ImageTransition {
-                    from: if from {
-                        ImageLayoutTransition::FRAGMENT
-                    } else {
-                        ImageLayoutTransition::UNDEFINED
-                    },
-                    to: ImageLayoutTransition::new(ImageLayout::TransferDst),
-                    aspect: ImageAspect::COLOR,
-                    ..Default::default()
-                },
+                ImageLayoutTransition::new(ImageLayout::TransferDst),
             );
             cmd.copy_buffer_to_image(&CopyBufferToImageInfo {
                 src: &upload.buffer,
@@ -808,23 +790,7 @@ impl Frame<'_> {
                 dst_layout: ImageLayout::TransferDst,
                 regions: &upload.regions,
             });
-            cmd.image_transition(
-                &texture.image.image,
-                ImageTransition {
-                    from: ImageLayoutTransition::new(ImageLayout::TransferDst),
-                    to: ImageLayoutTransition::FRAGMENT,
-                    aspect: ImageAspect::COLOR,
-                    ..Default::default()
-                },
-            );
-
-            upload_state.insert(upload.texture_id, true);
-        }
-
-        for texture_id in upload_state.into_keys() {
-            if let Some(texture) = self.renderer.textures.get_mut(&texture_id) {
-                texture.initialized = true;
-            }
+            cmd.image_transition(&texture.image.image, ImageLayoutTransition::FRAGMENT);
         }
     }
 
@@ -993,4 +959,3 @@ fn texture_wrap(wrap: epaint::textures::TextureWrapMode) -> SamplerAddressMode {
         epaint::textures::TextureWrapMode::MirroredRepeat => SamplerAddressMode::MirroredRepeat,
     }
 }
-
